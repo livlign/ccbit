@@ -87,7 +87,7 @@ func TestLine1Done(t *testing.T) {
 		},
 	}
 	got := Render(v, ctx())[0]
-	want := "(つ•‿•)つ edited 2 files · build ✓ · tests ✓"
+	want := "(つ•‿•)つ 2 files edited. Build succeeded. Tests succeeded."
 	if got != want {
 		t.Fatalf("line1 = %q, want %q", got, want)
 	}
@@ -144,10 +144,10 @@ func TestRenderTwoLines(t *testing.T) {
 
 func TestFmtDur(t *testing.T) {
 	cases := map[time.Duration]string{
-		45 * time.Second:                    "45s",
-		2*time.Minute + 14*time.Second:      "2m14s",
-		4*time.Minute + 8*time.Second:       "4m08s",
-		1*time.Hour + 5*time.Minute:         "1h05m",
+		45 * time.Second:               "45s",
+		2*time.Minute + 14*time.Second: "2m14s",
+		4*time.Minute + 8*time.Second:  "4m08s",
+		1*time.Hour + 5*time.Minute:    "1h05m",
 	}
 	for d, want := range cases {
 		if got := fmtDur(d); got != want {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/livlign/ccbit/internal/input"
+	"github.com/livlign/ccbit/internal/sessions"
 	"github.com/livlign/ccbit/internal/state"
 	"github.com/livlign/ccbit/internal/transcript"
 )
@@ -28,6 +29,13 @@ type Ctx struct {
 	Frame    int // 0 or 1, wall-clock selected
 	ColorOn  bool
 	Now      time.Time
+
+	Trend    sessions.Trend  // context-window velocity for the ctx% segment
+	Siblings []sessions.Beat // other live sessions, actionable-first
+
+	// TypicalTurn is the project's learned mean turn duration (0 if not yet
+	// learned), used to flag a turn running unusually long.
+	TypicalTurn time.Duration
 }
 
 // Face returns the kaomoji for a state. Working and Agents animate via Frame;
@@ -75,11 +83,18 @@ func Face(s state.State, frame int, narrow bool) string {
 }
 
 // Render builds all output lines for the view. Line 1 (the reactive line) is
-// colored as a whole by state; line 2 is the ambient context line.
+// Bit narrating this session — its state, what it changed, and a word about any
+// sibling sessions — colored as a whole by state; line 2 is ambient context.
 func Render(v state.View, c Ctx) []string {
 	l1 := Face(v.State, c.Frame, c.Narrow) + " " + line1(v, c)
 	if c.ColorOn {
 		l1 = colorize(l1, line1Color(v.State))
+	}
+	// The sibling clause is appended outside the whole-line color so its own
+	// per-severity colors survive (an embedded reset would otherwise truncate
+	// the state color for the rest of the line).
+	if clause := siblingClause(c); clause != "" {
+		l1 += " · " + clause
 	}
 	return []string{l1, line2(c)}
 }
@@ -107,11 +122,15 @@ func line1Color(s state.State) string {
 func line1(v state.View, c Ctx) string {
 	switch v.State {
 	case state.Working:
+		// No lines count here: a live, climbing diff mid-turn is noise — the
+		// file list and elapsed clock already convey "work in progress." The
+		// cumulative +/- lands on the Done line, where it summarizes the result.
 		segs := projectSplit(v.Turn.Edited, c.RepoRoot, c.In.ProjectDir)
-		if len(segs) == 0 {
-			return "working" + elapsedSuffix(v)
+		base := "working"
+		if len(segs) > 0 {
+			base = "editing " + strings.Join(segs, " · ")
 		}
-		return "editing " + strings.Join(segs, " · ") + elapsedSuffix(v)
+		return base + elapsedSuffix(v) + longerThanUsual(v, c)
 
 	case state.Agents:
 		s := pluralCount(v.AgentsRunning, "agent") + " running"
@@ -132,18 +151,7 @@ func line1(v state.View, c Ctx) string {
 		return kind + " failed"
 
 	case state.DoneNormal, state.DoneRedeemed:
-		parts := []string{fmt.Sprintf("edited %s", countFiles(len(v.Turn.Edited)))}
-		if bp := buildPart(v.Turn.Builds); bp != "" {
-			parts = append(parts, bp)
-		}
-		if tp := testPart(v.Turn.Builds); tp != "" {
-			parts = append(parts, tp)
-		}
-		out := strings.Join(parts, " · ")
-		if v.State == state.DoneRedeemed {
-			out += " (recovered)"
-		}
-		return out
+		return doneSentence(v, c)
 
 	case state.Stopped:
 		act := lastActivity(v.Turn, c.RepoRoot, c.In.ProjectDir)
@@ -173,6 +181,202 @@ func line2(c Ctx) string {
 		parts = append(parts, seg)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// siblingClause is Bit speaking up about the other live sessions, by name. One
+// that needs attention or just finished gets a sentence ("The session "Read and
+// review project" has new updates — take a look"); when several are merely busy
+// it's a light note ("3 other sessions running"); a single idle one isn't worth
+// mentioning. Empty when no other session is live.
+func siblingClause(c Ctx) string {
+	others := c.Siblings
+	if len(others) == 0 {
+		return ""
+	}
+	const maxNamed = 2
+	var named []string
+	extra := 0
+	allDone := true // every named sibling is a fresh completion (pure good news)
+	for _, b := range others {
+		if !sessions.Notable(b, c.Now) {
+			continue
+		}
+		if len(named) < maxNamed {
+			named = append(named, siblingPhrase(b, c.Now, c.ColorOn))
+			if !sessions.JustCompleted(b, c.Now) {
+				allDone = false
+			}
+		} else {
+			extra++
+		}
+	}
+
+	if len(named) == 0 {
+		// Only benign sessions elsewhere. A lone one is noise; several are a
+		// useful "you've got others open" reminder.
+		if len(others) < 2 {
+			return ""
+		}
+		return fmt.Sprintf("%d other sessions running", len(others))
+	}
+
+	body := strings.Join(named, ", ")
+	if extra > 0 {
+		body += fmt.Sprintf(", and %d more", extra)
+	}
+	s := "Elsewhere: " + body
+	if len(named) == 1 {
+		s = "The session " + body
+	}
+	// When the only news is "a turn finished," add Bit's nudge.
+	if allDone {
+		s += " — take a look"
+	}
+	return s
+}
+
+// siblingPhrase is Bit naming one session and what it's doing — "Read and review
+// project" has new updates", "api crashed", "web needs you" — colored so the
+// meaning reads even mid-sentence (green for a finished turn, severity color for
+// an alert).
+func siblingPhrase(b sessions.Beat, now time.Time, colorOn bool) string {
+	word, col := siblingWord(b.State), line1Color(siblingState(b.State))
+	if sessions.JustCompleted(b, now) {
+		word, col = "has new updates", green
+	}
+	phrase := siblingName(b) + " " + word
+	if colorOn {
+		return colorize(phrase, col)
+	}
+	return phrase
+}
+
+// siblingName identifies a session: its ai-title (quoted, since titles are
+// multi-word) if known, else the project dir, else a generic stand-in.
+func siblingName(b sessions.Beat) string {
+	if b.Title != "" {
+		return `"` + b.Title + `"`
+	}
+	if b.Project != "" {
+		return b.Project
+	}
+	return "another session"
+}
+
+func siblingWord(s string) string {
+	switch s {
+	case "failed":
+		return "crashed"
+	case "stopped":
+		return "stalled"
+	case "waiting":
+		return "needs you"
+	default:
+		return s
+	}
+}
+
+// siblingState maps a heartbeat's state string back to a state.State purely to
+// reuse line1Color for the digest (red/bright-red/yellow). Only the actionable
+// states are reachable here.
+func siblingState(s string) state.State {
+	switch s {
+	case "failed":
+		return state.Failed
+	case "stopped":
+		return state.Stopped
+	case "waiting":
+		return state.Waiting
+	default:
+		return state.Idle
+	}
+}
+
+// doneSentence is Bit recapping a finished turn in plain sentences rather than a
+// glyph-and-bullet list: "4 files edited, line changes: +885/-99. Build
+// succeeded. Tests succeeded." Each clause appears only when it happened.
+func doneSentence(v state.View, c Ctx) string {
+	var sentences []string
+
+	work := ""
+	if n := len(v.Turn.Edited); n > 0 {
+		work = countFiles(n) + " edited"
+	}
+	if d := linesDelta(c); d != "" {
+		if work != "" {
+			work += ", line changes: " + d
+		} else {
+			work = "Line changes: " + d
+		}
+	}
+	if work != "" {
+		sentences = append(sentences, work)
+	}
+	// On a recovery (red -> green this turn), the first passing result reads
+	// "green again" — a subtle nod to the save, instead of a flat "succeeded".
+	redeemed := v.State == state.DoneRedeemed
+	greenUsed := false
+	if ran, ok := outcome(v.Turn.Builds, "build"); ran {
+		w := "Build " + outcomeWord(ok)
+		if redeemed && ok && !greenUsed {
+			w, greenUsed = "Build green again", true
+		}
+		sentences = append(sentences, w)
+	}
+	if ran, ok := outcome(v.Turn.Builds, "test"); ran {
+		w := "Tests " + outcomeWord(ok)
+		if redeemed && ok && !greenUsed {
+			w, greenUsed = "Tests green again", true
+		}
+		sentences = append(sentences, w)
+	}
+	if len(sentences) == 0 {
+		return "done"
+	}
+	return strings.Join(sentences, ". ") + "."
+}
+
+// longerThanUsual is Bit's subtle note that this turn has run well past the
+// project's learned norm. Silent until enough history exists and the turn is
+// clearly over the line (2x typical), so it never cries wolf on normal variance.
+func longerThanUsual(v state.View, c Ctx) string {
+	if c.TypicalTurn <= 0 || !v.HasElapsed {
+		return ""
+	}
+	if v.Elapsed > 2*c.TypicalTurn {
+		return " (longer than usual)"
+	}
+	return ""
+}
+
+// linesDelta is the session's cumulative diff size as bare "+added/-removed";
+// doneSentence supplies the "line changes:" lead-in.
+func linesDelta(c Ctx) string {
+	a, r := c.In.LinesAdded, c.In.LinesRemoved
+	if a == 0 && r == 0 {
+		return ""
+	}
+	return fmt.Sprintf("+%d/-%d", a, r)
+}
+
+// outcome reports whether a build/test of the given kind ran this turn and, if
+// so, whether the latest one passed.
+func outcome(builds []transcript.BuildResult, kind string) (ran, ok bool) {
+	ok = true
+	for _, b := range builds {
+		if b.Kind == kind {
+			ran = true
+			ok = !b.IsError
+		}
+	}
+	return ran, ok
+}
+
+func outcomeWord(ok bool) string {
+	if ok {
+		return "succeeded"
+	}
+	return "failed"
 }
 
 func pluralCount(n int, noun string) string {
@@ -248,48 +452,6 @@ func countFiles(n int) string {
 	return fmt.Sprintf("%d files", n)
 }
 
-func buildPart(builds []transcript.BuildResult) string {
-	ran, ok := false, true
-	for _, b := range builds {
-		if b.Kind == "build" {
-			ran = true
-			if b.IsError {
-				ok = false
-			} else {
-				ok = true
-			}
-		}
-	}
-	if !ran {
-		return ""
-	}
-	if ok {
-		return "build ✓"
-	}
-	return "build ✗"
-}
-
-func testPart(builds []transcript.BuildResult) string {
-	ran, ok := false, true
-	for _, b := range builds {
-		if b.Kind == "test" {
-			ran = true
-			if b.IsError {
-				ok = false
-			} else {
-				ok = true
-			}
-		}
-	}
-	if !ran {
-		return ""
-	}
-	if ok {
-		return "tests ✓"
-	}
-	return "tests ✗"
-}
-
 func failedKind(builds []transcript.BuildResult) (string, bool) {
 	for i := len(builds) - 1; i >= 0; i-- {
 		if builds[i].IsError {
@@ -341,7 +503,7 @@ func ctxSegment(c Ctx) string {
 		return "ctx --"
 	}
 	pct := int(*c.In.CtxPct + 0.5)
-	body := fmt.Sprintf("ctx %d%%", pct)
+	body := fmt.Sprintf("ctx %d%%", pct) + trendArrow(c.Trend)
 	if !c.ColorOn {
 		return body
 	}
@@ -357,6 +519,20 @@ func ctxSegment(c Ctx) string {
 	}
 }
 
+// trendArrow renders context-window velocity: rising (↑) during active work,
+// falling (↓) after a compaction. Flat and unknown show nothing — an arrow that
+// only appears when context is actually moving is the signal worth the glyph.
+func trendArrow(t sessions.Trend) string {
+	switch t {
+	case sessions.TrendUp:
+		return " ↑"
+	case sessions.TrendDown:
+		return " ↓"
+	default:
+		return ""
+	}
+}
+
 func rateSegment(label string, rl *input.RateLimit, now time.Time) string {
 	if rl == nil || rl.UsedPercentage == nil {
 		return ""
@@ -364,7 +540,7 @@ func rateSegment(label string, rl *input.RateLimit, now time.Time) string {
 	seg := fmt.Sprintf("%s %d%%", label, int(*rl.UsedPercentage+0.5))
 	if rl.HasReset {
 		if d := rl.ResetsAt.Sub(now); d > 0 {
-			seg += fmt.Sprintf(" (resets %s)", fmtCountdown(d))
+			seg += fmt.Sprintf(" (%s)", fmtCountdown(d))
 		}
 	}
 	return seg

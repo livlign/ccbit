@@ -28,6 +28,7 @@ const (
 	KindUserPrompt
 	KindAssistant
 	KindToolResult
+	KindTitle // ai-title sidecar: the session's human-readable name
 )
 
 // ToolUse is a single tool invocation recorded on an assistant entry.
@@ -49,6 +50,7 @@ type Entry struct {
 	StopReason string // assistant: "end_turn" closes a turn; "tool_use" means more is coming
 	Model      string
 	PromptID   string
+	Title      string // KindTitle: the session's ai-title
 
 	// assistant
 	ToolUses []ToolUse
@@ -66,6 +68,7 @@ type rawEntry struct {
 	Type          string          `json:"type"`
 	Timestamp     string          `json:"timestamp"`
 	PromptID      string          `json:"promptId"`
+	AiTitle       string          `json:"aiTitle"`
 	Message       json.RawMessage `json:"message"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 }
@@ -172,6 +175,13 @@ func parseLine(line []byte, uses map[string]ToolUse) (Entry, bool) {
 	case "assistant":
 		e.Kind = KindAssistant
 		fillAssistant(&e, re, uses)
+		return e, true
+	case "ai-title":
+		if re.AiTitle == "" {
+			return Entry{}, false
+		}
+		e.Kind = KindTitle
+		e.Title = re.AiTitle
 		return e, true
 	default:
 		// Metadata sidecar entries (last-prompt, ai-title, mode, permission-mode,
@@ -306,6 +316,18 @@ func looksLikeBashResult(raw json.RawMessage) bool {
 		return false
 	}
 	return probe.Stdout != nil || probe.Stderr != nil
+}
+
+// LatestTitle returns the most recent ai-title in the parsed entries, or "" if
+// none appear in the tail. Callers persist it so it survives scrolling out of
+// the tail on long sessions.
+func LatestTitle(entries []Entry) string {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Kind == KindTitle {
+			return entries[i].Title
+		}
+	}
+	return ""
 }
 
 func hasToolUseResult(raw json.RawMessage) bool {

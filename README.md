@@ -1,126 +1,149 @@
 # ccbit
 
-A session-awareness layer for [Claude Code](https://claude.com/claude-code), led by a stateful kaomoji face named **Bit**. Hooks observe session state as events fire, write it to per-session files, and a custom status line renders it — Bit's expression maps to what the session is doing right now.
+A session-awareness status line for [Claude Code](https://claude.com/claude-code), led by a stateful kaomoji face named **Bit**. On every render Bit reads the session transcript, works out what's happening, and narrates it in a line or two — like a small secretary sitting on the bottom row of your terminal.
 
-ccbit answers one question at a glance when you return to a session: *is anything working, done, waiting, broken, or stopped here — and what happened while I was away?*
+ccbit answers, at a glance: *is anything working, done, waiting, broken, or stopped here — what just changed, what's happening in my other sessions, and is this turn behaving normally?*
 
 ```
-(◣_◢) editing lhproduct · 4 files · lhecommservice · 2 files · 2m14s
-~/lhproduct · Opus · ctx 38% · 5h 23% (1h12m) · 7d 41% (2d3h)   ← dim, low-saturation
+(つ•‿•)つ 4 files edited, line changes: +885/-99. Build succeeded. Tests succeeded.
+~/ccbit · Opus · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
 ```
+
+It is a single Go binary. **No hooks, no daemons.** The transcript is the source of truth; Claude Code already writes it and owns its lifecycle. ccbit only reads it (plus two small, disposable state dirs of its own — see [How it works](#how-it-works)).
 
 ## Install
 
-Requires `jq` and Claude Code ≥ v2.1.153 (for `COLUMNS`-based width fallback).
+Requires Go 1.26+ to build, and Claude Code ≥ v2.1.153 (for the `COLUMNS` width hint).
 
 ```sh
-./install.sh
+go build -o ~/.claude/ccbit/ccbit ./cmd/ccbit
 ```
 
-The installer:
-- copies `statusline.sh` and `hooks/` into `~/.claude/ccbit/`,
-- creates the state root `~/.claude/sessions/`,
-- **merges** the status line + hooks into `~/.claude/settings.json` (backing it up first — existing hooks and configs are preserved; re-running is idempotent).
+Then point your status line at it in `~/.claude/settings.json`:
 
-There is one caveat: a settings file may only define **one** `statusLine`. If you already have a custom one, the installer warns and replaces it (your old value is in the timestamped `.bak`).
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/ccbit/ccbit",
+    "refreshInterval": 1
+  }
+}
+```
 
-Open a new Claude Code session to see Bit. No persistent state survives a session — `SessionEnd` wipes `~/.claude/sessions/<id>/`.
+Open a new Claude Code session to see Bit. A settings file may only define **one** `statusLine`; if you already have one, this replaces it.
 
-## States & faces
+## What Bit says
 
-Eight states, one fixed face each, derived in priority order (first match wins):
+### Line 1 — the reactive line
+
+Bit's face maps to the session state (first match wins, in priority order), and the text recaps what's going on. The whole line is colored by state.
 
 | Priority | State | Face | When |
 |---|---|---|---|
-| 1 | Stopped | `(¬°-°)¬` | working but no activity for >45s (and not waiting on you) |
-| 2 | Failed | `(╯°□°)╯︵ ┻━┻` | latest build/test exited non-zero |
+| 1 | Stopped | `(¬°-°)¬` | a turn is open but has gone quiet past the stall threshold (and isn't waiting on you or running agents) |
+| 2 | Failed | `(╯°□°)╯︵ ┻━┻` | the latest build/test errored |
 | 3 | Waiting on you | `(◕_◕)?` | a question or plan is awaiting your answer |
-| 4 | Agents running | `┏(•_•)┛ ⇄ ┗(•_•)┓` | subagents in flight (spawned − done > 0) |
-| 5 | Working | `(◣_◢) ⇄ (◢_◣)` | a turn is in progress |
-| 6 | Done (redeemed) | `(→_←")` | idle, latest build passed after a failure this turn |
-| 7 | Done (normal) | `(つ•‿•)つ` | idle and the turn did real work — a build passed, or files were edited |
+| 4 | Agents running | `┏(•_•)┛ ⇄ ┗(•_•)┓` | subagents are in flight |
+| 5 | Working | `-(๏_๏)- ⇄ ৲(๏_๏)৲` | a turn is in progress |
+| 6 | Done (recovered) | `(→_←")` | idle, and a build/test passed this turn after an earlier failure |
+| 7 | Done | `(つ•‿•)つ` | idle, and a build/test passed this turn |
 | 8 | Idle | `(•_•)` | nothing else applies (e.g. a turn that only read or answered) |
 
-> The "Done" recap persists until your next prompt, so a finished turn always leaves a one-line summary of what it did (`edited N files · build succeeded`) rather than snapping back to a blank `idle`. A turn that edited nothing and ran no build/test stays `idle`.
-
-Results are spelled out in words (`build succeeded` / `build failed`, `tests succeeded` / `tests failed`) rather than `✓`/`✗` glyphs, and the agent tally reads `5 spawned · 3 done · 2 running`. Line 2 is rendered dim (low-saturation) with no accent color. The current directory shows in full when short, collapsing to the last two segments, then the basename, as it gets longer (tune the cutoff with `CCBIT_PATHMAX`).
-
-Motion exists only in Working and Agents-running — a 2-frame swap on a ~2s wall-clock cycle (`frame = (epoch/2) % 2`), stateless and time-derived so concurrent repaints never jitter. The felt liveness during a long turn comes from the **numbers** ticking (file count, elapsed clock), not the face.
-
-**Width safety:** when `COLUMNS < 60`, width-risky faces fall back to ASCII-safe forms (`(つ•‿•)つ → (•‿•)`, the table flip → `(>_<) FAILED`, the agent arms → `(•_•)> ⇄ <(•_•)`). If `COLUMNS` is unset (older CC), ccbit assumes wide and never crashes.
-
-### Catch-up tail
-
-When you return after **more than one** turn has completed unattended (e.g. auto-pilot ran several turns), a third line summarizes them:
+Bit recaps in plain sentences rather than a row of glyphs:
 
 ```
-while away — turn 2: 5 agents · turn 3: tests failed · turn 4: 2 files
+(つ•‿•)つ 4 files edited, line changes: +885/-99. Build succeeded. Tests succeeded.
+(→_←")  2 files edited. Build green again.
+-(๏_๏)- editing ccbit (3 files) · 2m14s
+(╯°□°)╯︵ ┻━┻ ccbit build failed
+(¬°-°)¬ stopped · last: editing render.go · 2m ago
 ```
 
-Capped at 5 turn groups (older ones collapse to `+N earlier turns`) and aggregated per turn. It clears on your next prompt. It's a glance/index — full results live in the transcript.
+Motion exists only in Working and Agents — a 2-frame swap on a ~2s wall-clock cycle, time-derived so concurrent repaints never jitter. The felt liveness during a long turn comes from the **numbers** ticking, not the face.
+
+### Other sessions
+
+When you run several sessions at once, Bit speaks up about the others on line 1 — by their session title, so you know which window to switch to:
+
+```
+(•_•) idle · The session "Read and review project" has new updates — take a look
+(•_•) idle · Elsewhere: api crashed, web needs you
+(•_•) idle · 3 other sessions running
+```
+
+- A session that **just finished** a turn is flagged with a nudge (it clears when you switch over and prompt it, and stops nagging after a while).
+- A session that **crashed**, **needs you**, or **stalled** is named with its state.
+- Several merely-busy sessions become a light count; a single idle one isn't mentioned at all.
+
+### Line 2 — the ambient line
+
+```
+~/ccbit · Opus · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
+```
+
+Current directory, model, context-window usage, and rate-limit windows with their reset countdowns. `ctx%` colors only when it warrants attention (≥70 yellow, ≥90 red) and carries a velocity arrow — `↑` while context is climbing, `↓` after a `/compact`.
+
+## Bit gets smarter over time
+
+ccbit keeps a small, **numbers-only** memory per project (no prompt text is ever stored). It folds each completed turn into a couple of moving averages and uses them to move past one-size-fits-all rules:
+
+- **Learned stall threshold.** "Stopped" is no longer a fixed timer — it adapts to how long *this* project's turns normally pause. A repo with slow builds stops falsely reading as stalled; a snappy one flags a hang sooner. (Still overridable with `CCBIT_STALL`.)
+- **"longer than usual."** While working, Bit adds a quiet note when a turn runs well past the project's norm.
+- **Subtle personality.** A red→green recovery reads `Build green again.` rather than a flat status.
+
+Everything stays silent until there's enough history to be trustworthy — a wrong insight costs more than a missing one. Memory is disposable: delete `~/.claude/ccbit/memory/` and ccbit falls back to its fixed defaults.
 
 ## Configuration
 
-Environment variables (set them in your shell or Claude Code env):
-
 | Var | Default | Meaning |
 |---|---|---|
-| `CCBIT_STALL` | `180` | seconds of inactivity before a working session reads as Stopped |
-| `CCBIT_NARROW` | `60` | `COLUMNS` below this triggers ASCII-safe faces |
-| `CCBIT_PATHMAX` | `28` | cwd char length above which the path collapses to fewer segments |
+| `CCBIT_STALL` | learned (≈45–300s) | seconds of inactivity before an open turn reads as Stopped; an explicit value overrides the learned one |
+| `NO_COLOR` | unset | set to disable all ANSI color |
+| `COLUMNS` | — | width hint; below ~60 columns, risky wide glyphs fall back to ASCII-safe faces |
 
 ## How it works
 
 ```
-Claude Code events ──► hooks (sensors) ──► per-session state files ──► status line (renderer)
-                                                  └──► append-only log (catch-up)
+Claude Code ──(stdin JSON: transcript_path, model, context, rate_limits, cost)──► ccbit (Go binary)
+                                                                                       │
+                                          reads ──► session transcript (.jsonl, last 2 MiB)
+                                          r/w   ──► ~/.claude/ccbit/sessions/  (heartbeats: cross-session awareness)
+                                          r/w   ──► ~/.claude/ccbit/memory/    (per-project learned aggregates)
+                                                                                       ▼
+                                                                       derive state ──► print 2 lines ──► exit
 ```
 
-Hooks only write; the renderer only reads. State lives under `~/.claude/sessions/<session_id>/`:
+Each invocation reads stdin, tail-reads the transcript (bounded at 2 MiB so cost stays flat on long sessions), derives the state, and prints. Two small on-disk stores let it do what a single transcript can't:
 
-| File | Written by | Holds |
-|---|---|---|
-| `turn` | turn-start, turn-end, every PostToolUse | `state turn_start_epoch turn_index last_activity_epoch` |
-| `files` | files.sh | distinct edited paths per project, this turn |
-| `build` | bash.sh | latest build/test `kind exit epoch project` |
-| `agents` | agent-spawn.sh, agent-done.sh | `spawned done` |
-| `log` | several | append-only, turn-grouped event history |
-| `wait` / `last` / `seen` | wait.sh / sensors / turn-start | waiting marker / last action / presence baseline |
+- **Heartbeats** are ephemeral per-session files. Each session writes its own state every render and reads its siblings' — that's how Bit knows another window crashed or finished. They carry the session's title and a rolling window of `ctx%` samples (for the velocity arrow), and self-expire when a session goes quiet.
+- **Memory** is durable per-project aggregates (typical turn duration and in-turn gaps), updated once per completed turn via a per-session high-water mark so the per-second renders never double-count.
 
-### Two implementation decisions worth flagging
-
-The PRD left two points open; this build resolves them as follows:
-
-1. **Agent spawn counting** (PRD §7.4, the preferred option). Each `Task` tool call spawns exactly one subagent, so a `PostToolUse: Task` hook (`agent-spawn.sh`) increments `spawned` by 1 per call; `SubagentStop` increments `done`. Running = `spawned − done`, clamped at 0. The running count is **inferred, not measured** — it drifts if an agent dies without firing `SubagentStop`.
-2. **Waiting-on-you detection** (PRD §3, priority 3 — no sensor was specified). A `wait.sh` hook on `PreToolUse`/`PostToolUse` for `AskUserQuestion|ExitPlanMode` sets the marker when Claude asks and clears it when you answer. While the marker is set, stall detection is suppressed so "waiting on you" never decays into "stopped".
-3. **Liveness / stall accuracy.** The PRD's hooks only bump `last_activity` on file edits, Bash, and agent events, so a turn full of reads (or long thinking, or a pending question) would falsely read as Stopped. An `activity.sh` hook on `PreToolUse` for **all** tools refreshes `last_activity` on every tool call, and the stall threshold defaults to **180s** — long enough that genuine think/work stretches don't trip it. A turn with zero tool calls for >180s can still read as Stopped (there is no assistant-heartbeat hook); raise `CCBIT_STALL` if you hit that.
-
-## Known limitations
-
-1. **Single-window only.** ccbit tells you about a session only when you're looking at it — cross-session alerting is out of scope by design (a status line can't reach outside its window).
-2. **Running agent count is inferred** (`spawned − done`), not measured; clamps at 0.
-3. **Stall detection is time-based** (180s default; refreshed by every tool call). A turn with no tool calls at all for longer than the threshold could still read as Stopped — tune `CCBIT_STALL`.
-4. **Motion is 2s / 2-frame, not smooth** — a hard floor from `refreshInterval`'s 1s minimum.
-5. **Width fallbacks are heuristic** (`COLUMNS`-based); terminals that don't set `COLUMNS` are assumed wide.
-6. **Catch-up has no read-receipt.** "Since you were last present" is approximated by turn boundaries (presence = your last prompt), capped at 5 groups.
-7. **Build/test signal is exit-code only** (v1 / tier 1). The line shows `build succeeded` / `build failed` / `tests succeeded`, never counts or reasons. Detection is heuristic keyword-matching on the command (`build`, `compile`, `test`, `dotnet test`, `pytest`, `cargo`, …). Test counts and error diagnosis are v2 (see PRD §10), gated on confirming the Bash `tool_response` carries stdout.
+Both are disposable optimizations, never authoritative: delete either dir and ccbit keeps working on fixed defaults.
 
 ## Layout
 
 ```
 ccbit/
-  statusline.sh              # renderer (stateless)
-  hooks/
-    turn-start.sh            # UserPromptSubmit
-    activity.sh              # PreToolUse (all tools) — refreshes last_activity
-    files.sh                 # PostToolUse Edit|Write|MultiEdit
-    bash.sh                  # PostToolUse Bash
-    agent-spawn.sh           # PostToolUse Task
-    agent-done.sh            # SubagentStop
-    wait.sh                  # Pre/PostToolUse AskUserQuestion|ExitPlanMode
-    turn-end.sh              # Stop
-    cleanup.sh               # SessionEnd
-  install.sh                 # merge-not-overwrite installer
-  error-signatures           # v2 tier-2 dictionary (user-editable, unused in v1)
-  README.md
+  cmd/ccbit/main.go            # entry: parse stdin → read transcript → derive → record → render
+  internal/
+    input/      stdin.go       # parse the status-line JSON (model, ctx%, rate limits, cost)
+    transcript/ transcript.go  # tail-read + parse the JSONL; ai-title capture
+                turns.go       # segment entries into turns; builds/edits/agents/gaps
+                subagents.go   # running-agent detection from the subagents sidechain
+    state/      state.go       # derive one of 8 states by fixed priority
+    sessions/   sessions.go    # heartbeats: siblings, completion nudges, ctx velocity, titles
+    memory/     memory.go      # durable per-project learning (numbers only)
+    render/     render.go      # state + signals → the two printed lines
+  docs/                        # PRD v1 / v2, debugging notes
+```
+
+## Known limitations
+
+1. **Single-window only by design.** ccbit informs you about other sessions *within the window you're looking at*; it never reaches outside it (no OS notifications).
+2. **Build/test signal is exit-code only.** The line says succeeded/failed, never counts or reasons. Detection is heuristic keyword-matching on the command (`go test`, `npm run build`, `pytest`, `cargo`, …).
+3. **"Done" requires a build/test.** A turn that only edited files reads as Idle — its edit recap appears only once something built or tested.
+4. **Learned values need history.** Per-project insights stay silent until they have enough samples; brand-new projects get the fixed defaults.
+5. **Running-agent count is inferred**, not measured.
+6. **Width fallbacks are heuristic** (`COLUMNS`-based); terminals that don't set `COLUMNS` are assumed wide.
 ```

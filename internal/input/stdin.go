@@ -25,9 +25,11 @@ type Stdin struct {
 	ProjectDir     string
 	Version        string
 
-	CtxPct   *float64
-	FiveHour *RateLimit
-	SevenDay *RateLimit
+	CtxPct       *float64
+	LinesAdded   int // session-cumulative, from cost.total_lines_added
+	LinesRemoved int // session-cumulative, from cost.total_lines_removed
+	FiveHour     *RateLimit
+	SevenDay     *RateLimit
 }
 
 type rawStdin struct {
@@ -41,7 +43,11 @@ type rawStdin struct {
 		CurrentDir string `json:"current_dir"`
 		ProjectDir string `json:"project_dir"`
 	} `json:"workspace"`
-	Version       string `json:"version"`
+	Version string `json:"version"`
+	Cost    *struct {
+		TotalLinesAdded   int `json:"total_lines_added"`
+		TotalLinesRemoved int `json:"total_lines_removed"`
+	} `json:"cost"`
 	ContextWindow *struct {
 		UsedPercentage *float64 `json:"used_percentage"`
 	} `json:"context_window"`
@@ -74,6 +80,10 @@ func Parse(r io.Reader) Stdin {
 	}
 	if raw.ContextWindow != nil {
 		s.CtxPct = raw.ContextWindow.UsedPercentage
+	}
+	if raw.Cost != nil {
+		s.LinesAdded = raw.Cost.TotalLinesAdded
+		s.LinesRemoved = raw.Cost.TotalLinesRemoved
 	}
 	if raw.RateLimits != nil {
 		s.FiveHour = convertRate(raw.RateLimits.FiveHour)

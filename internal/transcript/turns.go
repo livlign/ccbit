@@ -27,7 +27,13 @@ type Turn struct {
 	Pending     string // "AskUserQuestion" / "ExitPlanMode" while awaiting the user, else ""
 	Model       string
 
+	// MaxGap is the longest pause between consecutive timed entries within this
+	// turn — the basis for learning a per-project stall threshold.
+	MaxGap time.Duration
+
 	editedSet map[string]bool
+	lastTimed time.Time
+	hasTimed  bool
 }
 
 // BuildResult is one build/test command outcome in a turn. Kind is "build" or
@@ -41,7 +47,7 @@ type BuildResult struct {
 }
 
 var (
-	testRe = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+test\b|npm\s+(run\s+)?test|yarn\s+test|pnpm\s+(run\s+)?test|\bpytest\b|\bjest\b|\bvitest\b|mvn\s+test|gradle\w*\s+\w*test)`)
+	testRe  = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+test\b|npm\s+(run\s+)?test|yarn\s+test|pnpm\s+(run\s+)?test|\bpytest\b|\bjest\b|\bvitest\b|mvn\s+test|gradle\w*\s+\w*test)`)
 	buildRe = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+build\b|npm\s+run\s+build|yarn\s+build|pnpm\s+(run\s+)?build|\bmake\b|\bmsbuild\b|\btsc\b|gradle\w*\s+\w*build|mvn\s+(package|compile|install))`)
 )
 
@@ -78,10 +84,19 @@ func BuildTurns(entries []Entry) []Turn {
 	}
 
 	for _, e := range entries {
+		if e.Kind == KindTitle {
+			continue // sidecar metadata, not part of any turn
+		}
 		if e.Kind == KindUserPrompt || cur == nil {
 			open(e)
 		}
 		if e.HasTime {
+			if cur.hasTimed {
+				if gap := e.Time.Sub(cur.lastTimed); gap > cur.MaxGap {
+					cur.MaxGap = gap
+				}
+			}
+			cur.lastTimed, cur.hasTimed = e.Time, true
 			cur.Last, cur.HasLast = e.Time, true
 		}
 

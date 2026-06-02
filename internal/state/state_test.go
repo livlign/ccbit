@@ -98,4 +98,3 @@ func TestAgentCount(t *testing.T) {
 		t.Fatalf("running=%d done=%d, want 2/1", v.AgentsRunning, v.AgentsDone)
 	}
 }
-
