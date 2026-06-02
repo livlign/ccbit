@@ -1,1 +1,5 @@
 .DS_Store
+
+# Local dev build (committing per-platform binaries is a packaging decision, PRD 11.3)
+/bin/
+/testdata/
