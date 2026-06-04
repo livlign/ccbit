@@ -84,6 +84,7 @@ func main() {
 		Cols:        cols,
 		Narrow:      cols > 0 && cols < render.NarrowCols,
 		Frame:       int((now.Unix() / 2) % 2),
+		FrameFast:   int(now.Unix() % 2),
 		ColorOn:     os.Getenv("NO_COLOR") == "",
 		Now:         now,
 		Trend:       trend,

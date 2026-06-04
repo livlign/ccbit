@@ -25,10 +25,11 @@ type Ctx struct {
 	In       input.Stdin
 	RepoRoot string // git toplevel, or "" if unknown
 	Cols     int    // terminal width from COLUMNS, 0 if unset
-	Narrow   bool
-	Frame    int // 0 or 1, wall-clock selected
-	ColorOn  bool
-	Now      time.Time
+	Narrow    bool
+	Frame     int // 0 or 1, wall-clock selected (~2s swap) — Agents shimmy
+	FrameFast int // 0 or 1, wall-clock selected (~1s swap) — Working face
+	ColorOn   bool
+	Now       time.Time
 
 	Trend    sessions.Trend  // context-window velocity for the ctx% segment
 	Siblings []sessions.Beat // other live sessions, actionable-first
@@ -86,7 +87,11 @@ func Face(s state.State, frame int, narrow bool) string {
 // Bit narrating this session — its state, what it changed, and a word about any
 // sibling sessions — colored as a whole by state; line 2 is ambient context.
 func Render(v state.View, c Ctx) []string {
-	l1 := Face(v.State, c.Frame, c.Narrow) + " " + line1(v, c)
+	frame := c.Frame
+	if v.State == state.Working {
+		frame = c.FrameFast // Working swaps every ~1s; Agents stays at ~2s
+	}
+	l1 := Face(v.State, frame, c.Narrow) + " " + line1(v, c)
 	if c.ColorOn {
 		l1 = colorize(l1, line1Color(v.State))
 	}

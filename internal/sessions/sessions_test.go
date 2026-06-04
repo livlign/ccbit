@@ -5,10 +5,14 @@ import (
 	"time"
 )
 
-// isolate points HOME at a temp dir so Record/Active touch only test state.
+// isolate points the home dir at a temp dir so Record/Active touch only test
+// state. USERPROFILE is set too because os.UserHomeDir() uses it (not HOME) on
+// Windows — without it the test reads the real ~/.claude/ccbit/sessions dir.
 func isolate(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	d := t.TempDir()
+	t.Setenv("HOME", d)
+	t.Setenv("USERPROFILE", d)
 }
 
 func TestRecordTrend(t *testing.T) {
