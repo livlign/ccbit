@@ -94,6 +94,12 @@ type Beat struct {
 	// into the durable memory store — a high-water mark so a turn is counted once
 	// across the per-second renders, not on every repaint.
 	LastTurnStart int64 `json:"last_turn_start,omitempty"`
+	// LinesBase* snapshot the session-cumulative lines-changed counters (stdin
+	// cost.total_lines_*) as of the start of the turn LinesBaseTurn (unix), so
+	// the renderer can show this turn's delta instead of the whole-session total.
+	LinesBaseTurn    int64 `json:"lines_base_turn,omitempty"`
+	LinesBaseAdded   int   `json:"lines_base_added,omitempty"`
+	LinesBaseRemoved int   `json:"lines_base_removed,omitempty"`
 }
 
 // Snapshot returns this session's last-written heartbeat, or a zero Beat if none

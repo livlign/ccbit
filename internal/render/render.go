@@ -37,6 +37,13 @@ type Ctx struct {
 	// TypicalTurn is the project's learned mean turn duration (0 if not yet
 	// learned), used to flag a turn running unusually long.
 	TypicalTurn time.Duration
+
+	// TurnLinesAdded/Removed are this turn's lines-changed delta. The stdin cost
+	// counters are session-cumulative, so main re-bases them at each turn start
+	// (via the heartbeat) — keeping the recap's line numbers in the same scope as
+	// its per-turn file count.
+	TurnLinesAdded   int
+	TurnLinesRemoved int
 }
 
 // Face returns the kaomoji for a state. Working and Agents animate via Frame;
@@ -354,10 +361,11 @@ func longerThanUsual(v state.View, c Ctx) string {
 	return ""
 }
 
-// linesDelta is the session's cumulative diff size as bare "+added/-removed";
-// doneSentence supplies the "line changes:" lead-in.
+// linesDelta is this turn's diff size as bare "+added/-removed" (per-turn, not
+// the session total — see Ctx.TurnLinesAdded); doneSentence supplies the
+// "line changes:" lead-in.
 func linesDelta(c Ctx) string {
-	a, r := c.In.LinesAdded, c.In.LinesRemoved
+	a, r := c.TurnLinesAdded, c.TurnLinesRemoved
 	if a == 0 && r == 0 {
 		return ""
 	}

@@ -86,11 +86,11 @@ func TestLine1ShowsSiblings(t *testing.T) {
 
 func TestLinesDelta(t *testing.T) {
 	c := ctx()
-	c.In.LinesAdded, c.In.LinesRemoved = 182, 47
+	c.TurnLinesAdded, c.TurnLinesRemoved = 182, 47
 	if got := linesDelta(c); got != "+182/-47" {
 		t.Fatalf("linesDelta = %q, want %q", got, "+182/-47")
 	}
-	c.In.LinesAdded, c.In.LinesRemoved = 0, 0
+	c.TurnLinesAdded, c.TurnLinesRemoved = 0, 0
 	if got := linesDelta(c); got != "" {
 		t.Fatalf("zero diff should be empty, got %q", got)
 	}
@@ -98,7 +98,7 @@ func TestLinesDelta(t *testing.T) {
 
 func TestDoneSentence(t *testing.T) {
 	c := ctx()
-	c.In.LinesAdded, c.In.LinesRemoved = 885, 99
+	c.TurnLinesAdded, c.TurnLinesRemoved = 885, 99
 	v := state.View{
 		State: state.DoneNormal,
 		Turn: transcript.Turn{

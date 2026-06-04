@@ -45,7 +45,9 @@ func main() {
 			turns = transcript.BuildTurns(entries)
 			title = transcript.LatestTitle(entries)
 		}
-		turnStart, hasStart := currentTurnStart(turns)
+	}
+	turnStart, hasStart := currentTurnStart(turns)
+	if in.TranscriptPath != "" {
 		agents = transcript.ScanSubagents(in.TranscriptPath, now, stall, turnStart, hasStart)
 	}
 
@@ -65,14 +67,30 @@ func main() {
 		lastTurnStart = t.Start.Unix()
 	}
 
+	// Per-turn lines-changed: the stdin cost counters are session-cumulative, so
+	// snapshot them at each turn start (carried in the heartbeat) and show the
+	// delta — the recap's line numbers then match its per-turn file count.
+	baseTurn, baseAdded, baseRemoved := prev.LinesBaseTurn, prev.LinesBaseAdded, prev.LinesBaseRemoved
+	turnAdded, turnRemoved := 0, 0
+	if hasStart {
+		if turnStart.Unix() != baseTurn {
+			baseTurn, baseAdded, baseRemoved = turnStart.Unix(), in.LinesAdded, in.LinesRemoved
+		}
+		turnAdded = max(0, in.LinesAdded-baseAdded)
+		turnRemoved = max(0, in.LinesRemoved-baseRemoved)
+	}
+
 	// Heartbeat: record this session's state for sibling sessions to read, and
 	// get back our own context-window velocity from the rolling ctx samples.
 	trend := sessions.Record(sessions.Beat{
-		SessionID:     in.SessionID,
-		State:         v.State.String(),
-		Project:       label,
-		Title:         title,
-		LastTurnStart: lastTurnStart,
+		SessionID:        in.SessionID,
+		State:            v.State.String(),
+		Project:          label,
+		Title:            title,
+		LastTurnStart:    lastTurnStart,
+		LinesBaseTurn:    baseTurn,
+		LinesBaseAdded:   baseAdded,
+		LinesBaseRemoved: baseRemoved,
 	}, in.CtxPct, now)
 
 	cols := envInt("COLUMNS")
@@ -87,9 +105,11 @@ func main() {
 		FrameFast:   int(now.Unix() % 2),
 		ColorOn:     os.Getenv("NO_COLOR") == "",
 		Now:         now,
-		Trend:       trend,
-		Siblings:    sessions.Active(in.SessionID, now),
-		TypicalTurn: stats.TypicalTurn(),
+		Trend:            trend,
+		Siblings:         sessions.Active(in.SessionID, now),
+		TypicalTurn:      stats.TypicalTurn(),
+		TurnLinesAdded:   turnAdded,
+		TurnLinesRemoved: turnRemoved,
 	}
 
 	for _, line := range render.Render(v, ctx) {
