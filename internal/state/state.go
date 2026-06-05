@@ -42,6 +42,12 @@ func (s State) String() string {
 	}
 }
 
+// toolGrace is how long an in-flight tool call (tool_use flushed, no result
+// yet) may keep a quiet turn in Working before it's considered Stopped. Long
+// commands legitimately run to their ~10m timeout while the transcript stays
+// silent; only beyond that is the session presumed hung.
+const toolGrace = 15 * time.Minute
+
 // DefaultStall is how long an open turn may go without a new entry before it is
 // considered Stopped. Set above the typical gap of a long pure-text generation
 // (which writes no transcript entries while composing) to avoid false stalls;
@@ -58,6 +64,12 @@ type View struct {
 	HasElapsed    bool
 	LastAge       time.Duration
 	HasLastAge    bool
+
+	// InFlight is the tool call currently executing (display text + how long),
+	// when one is — the "it's running a long command, not hung" readout.
+	InFlight    string
+	InFlightFor time.Duration
+	HasInFlight bool
 }
 
 // Derive computes the View from the full ordered list of turns and subagent
@@ -96,10 +108,26 @@ func Derive(turns []transcript.Turn, now time.Time, stall time.Duration, agents 
 		stalled = v.LastAge > stall
 	}
 
+	// An in-flight tool call keeps a quiet turn alive: the transcript is silent
+	// while a long command runs, but the flushed tool_use proves work is
+	// happening. The grace window expires for tools that outlive any plausible
+	// timeout (genuinely hung).
+	toolActive := false
+	if cur.Open && cur.InFlight != "" {
+		since := cur.Last
+		if cur.HasInFlight {
+			since = cur.InFlightSince
+		}
+		v.InFlight = cur.InFlight
+		v.InFlightFor = now.Sub(since)
+		v.HasInFlight = true
+		toolActive = v.InFlightFor < toolGrace
+	}
+
 	latestErr, earlierErr, hasBuild := analyzeBuilds(cur.Builds)
 
 	switch {
-	case cur.Open && stalled && cur.Pending == "" && running == 0:
+	case cur.Open && stalled && cur.Pending == "" && running == 0 && !toolActive:
 		v.State = Stopped
 	case hasBuild && latestErr:
 		v.State = Failed

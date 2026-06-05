@@ -115,6 +115,7 @@ func main() {
 		TurnLinesRemoved: turnRemoved,
 		Tasks:            tasks,
 		ProjectLabel:     label,
+		LastPromptAt:     turnStart, // zero when no turn seen: show all sibling news
 		Git:              gitInfo(root, now),
 	}
 

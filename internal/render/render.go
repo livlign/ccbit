@@ -54,6 +54,12 @@ type Ctx struct {
 	// spot a sibling session working the same repo (edit-collision risk).
 	ProjectLabel string
 
+	// LastPromptAt is when the user last submitted a prompt in THIS session —
+	// the interaction read-receipt: any sibling news older than this has been on
+	// the status line while the user was demonstrably at this window, so it's
+	// considered delivered and stops nagging. Zero when unknown (show all news).
+	LastPromptAt time.Time
+
 	// Git is the repo's branch/dirty/ahead/behind snapshot for the ambient line.
 	Git gitx.Info
 }
@@ -157,6 +163,12 @@ func line1(v state.View, c Ctx) string {
 		if t := taskClause(c.Tasks); t != "" {
 			base += " · " + t
 		}
+		// A command that's been executing a while is THE thing to say — it
+		// explains the quiet ("running: dotnet test … (3m)"), where the old
+		// readout decayed into a false "stopped · last: thinking".
+		if r := runningClause(v); r != "" {
+			base += " · " + r
+		}
 		return base + elapsedSuffix(v) + longerThanUsual(v, c) + loopNote(v.Turn)
 
 	case state.Agents:
@@ -252,12 +264,13 @@ func siblingClause(c Ctx) string {
 			named, allDone = append(named, phrase), false
 			continue
 		}
-		if !sessions.Notable(b, c.Now) {
+		fresh := freshCompletion(b, c)
+		if !sessions.Actionable(b.State) && !fresh {
 			continue
 		}
 		if len(named) < maxNamed {
-			named = append(named, siblingPhrase(b, c.Now, c.ColorOn))
-			if !sessions.JustCompleted(b, c.Now) {
+			named = append(named, siblingPhrase(b, fresh, c.ColorOn))
+			if !fresh {
 				allDone = false
 			}
 		} else {
@@ -298,13 +311,24 @@ func collision(b sessions.Beat, project string) bool {
 	return b.State == "working" || b.State == "agents"
 }
 
+// freshCompletion is the completion nudge gated by the interaction
+// read-receipt: it shows only while recent AND newer than the user's last
+// prompt in this session. Typing here acknowledges everything already shown,
+// so read news stops lingering on the line.
+func freshCompletion(b sessions.Beat, c Ctx) bool {
+	if !sessions.JustCompleted(b, c.Now) {
+		return false
+	}
+	return c.LastPromptAt.IsZero() || b.DoneSince > c.LastPromptAt.Unix()
+}
+
 // siblingPhrase is Bit naming one session and what it's doing — "Read and review
 // project" has new updates", "api crashed", "web needs you" — colored so the
 // meaning reads even mid-sentence (green for a finished turn, severity color for
 // an alert).
-func siblingPhrase(b sessions.Beat, now time.Time, colorOn bool) string {
+func siblingPhrase(b sessions.Beat, fresh, colorOn bool) string {
 	word, col := siblingWord(b.State), line1Color(siblingState(b.State))
-	if sessions.JustCompleted(b, now) {
+	if fresh {
 		word, col = "has new updates", green
 	}
 	phrase := siblingName(b) + " " + word
@@ -476,6 +500,17 @@ func taskClause(t transcript.TaskSummary) string {
 		return fmt.Sprintf("tasks %d/%d done", t.Done, t.Total)
 	}
 	return ""
+}
+
+// runningClause names a tool call that has been executing for a while —
+// long-running commands are silent in the transcript, so this is what stands
+// between "running: dotnet test (3m)" and a false "stopped". Quick calls stay
+// silent (every render would otherwise narrate routine sub-30s commands).
+func runningClause(v state.View) string {
+	if !v.HasInFlight || v.InFlightFor < 30*time.Second {
+		return ""
+	}
+	return fmt.Sprintf("running: %s (%s)", ellipsize(v.InFlight, 36), fmtDur(v.InFlightFor))
 }
 
 // loopNote flags file churn: the same file reworked over and over this turn

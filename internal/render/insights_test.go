@@ -34,6 +34,23 @@ func TestTaskClauseOnWorking(t *testing.T) {
 	}
 }
 
+func TestRunningClause(t *testing.T) {
+	v := state.View{State: state.Working, HasInFlight: true,
+		InFlight: `dotnet list "D:\proj\x.sln" package --vulnerable --include-transitive`, InFlightFor: 3*time.Minute + 18*time.Second}
+	got := Render(v, ctx())[0]
+	if !strings.Contains(got, "running: ") || !strings.Contains(got, "(3m18s)") {
+		t.Fatalf("working line = %q, want running clause with duration", got)
+	}
+	if strings.Contains(got, "--include-transitive") {
+		t.Fatalf("command should be ellipsized, got %q", got)
+	}
+	// Quick calls stay silent.
+	v.InFlightFor = 5 * time.Second
+	if got = Render(v, ctx())[0]; strings.Contains(got, "running:") {
+		t.Fatalf("sub-30s tool should be silent, got %q", got)
+	}
+}
+
 func TestLoopNoteOnWorking(t *testing.T) {
 	v := state.View{State: state.Working, Turn: transcript.Turn{
 		Edited: []string{"D:/proj/a/render.go"}, HotFile: "D:/proj/a/render.go", HotFileEdits: 5,
@@ -94,6 +111,28 @@ func TestDoneShipClauses(t *testing.T) {
 	got = Render(v, ctx())[0]
 	if !strings.Contains(got, "Committed, not pushed.") {
 		t.Fatalf("done line = %q, want committed-not-pushed nudge", got)
+	}
+}
+
+func TestCompletionNudgeReadReceipt(t *testing.T) {
+	c := ctx()
+	doneAt := c.Now.Add(-2 * time.Minute)
+	c.Siblings = []sessions.Beat{{SessionID: "x", State: "idle", Project: "web", Title: "Fix login", DoneSince: doneAt.Unix()}}
+
+	// News arrived after the user's last prompt here: nudge shows.
+	c.LastPromptAt = doneAt.Add(-10 * time.Minute)
+	if got := Render(state.View{State: state.Idle}, c)[0]; !strings.Contains(got, "has new updates") {
+		t.Fatalf("unseen completion should nudge, got %q", got)
+	}
+	// The user prompted this session AFTER the news existed: considered read.
+	c.LastPromptAt = doneAt.Add(30 * time.Second)
+	if got := Render(state.View{State: state.Idle}, c)[0]; strings.Contains(got, "has new updates") {
+		t.Fatalf("acknowledged completion should stop nudging, got %q", got)
+	}
+	// Alerts are NOT receipt-cleared: a crashed sibling nags until fixed.
+	c.Siblings = []sessions.Beat{{SessionID: "x", State: "failed", Project: "web", Title: "Fix login"}}
+	if got := Render(state.View{State: state.Idle}, c)[0]; !strings.Contains(got, "crashed") {
+		t.Fatalf("alert must persist regardless of receipt, got %q", got)
 	}
 }
 

@@ -79,6 +79,9 @@ func TestStatePriority(t *testing.T) {
 		{"stopped", j(up(base, "x"), asstTool(base, tuWrite("t1", "D:/proj/a/Order.go"))), stalled, Stopped},
 		// Regression: a running agent (open turn, no entries for >stall) is Agents, not Stopped.
 		{"running-agent-not-stopped", j(up(base, "x"), asstTool(base, tuTask("t1"))), stalled, Agents},
+		// Regression: a long-running tool (tool_use flushed, no result, quiet for
+		// >stall) is Working, not Stopped — commands run minutes legitimately.
+		{"inflight-tool-not-stopped", j(up(base, "x"), asstTool(base, tuBash("t1", "dotnet list pkg --vulnerable"))), stalled, Working},
 		// Failed outranks an in-progress (open) next action.
 		{"failed-outranks-working", j(up(base, "x"), asstTool(base, tuBash("t1", "dotnet build")), resFail(base, "t1"), asstTool(base, tuWrite("t2", "D:/proj/a/x.go"))), soon, Failed},
 	}
@@ -89,6 +92,27 @@ func TestStatePriority(t *testing.T) {
 				t.Fatalf("state = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestInFlightToolGrace(t *testing.T) {
+	fixture := j(up(base, "x"), asstTool(base, tuBash("t1", "dotnet test --slow")))
+	// Within the grace window: Working, with the in-flight call exposed.
+	v := derive(fixture, mustTime(base).Add(3*time.Minute))
+	if v.State != Working {
+		t.Fatalf("state during long tool = %v, want Working", v.State)
+	}
+	if !v.HasInFlight || v.InFlight != "dotnet test --slow" || v.InFlightFor < 3*time.Minute {
+		t.Fatalf("in-flight = %q for %v, want the running command", v.InFlight, v.InFlightFor)
+	}
+	// A tool that outlived any plausible timeout is a hang: Stopped.
+	if got := derive(fixture, mustTime(base).Add(20*time.Minute)).State; got != Stopped {
+		t.Fatalf("state past tool grace = %v, want Stopped", got)
+	}
+	// A completed tool (result arrived) clears the in-flight readout.
+	done := j(up(base, "x"), asstTool(base, tuBash("t1", "dotnet test --slow")), resPass(base, "t1"))
+	if v := derive(done, mustTime(base).Add(10*time.Second)); v.HasInFlight {
+		t.Fatalf("in-flight should clear once the result lands, got %q", v.InFlight)
 	}
 }
 

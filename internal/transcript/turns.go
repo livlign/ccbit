@@ -44,9 +44,24 @@ type Turn struct {
 	Pushed    bool
 	Deployed  bool
 
+	// InFlight is a tool call still executing: its tool_use is flushed (current
+	// CC writes it at execution start) but no result has arrived. Long commands
+	// run minutes while the transcript stays silent — without this, they read
+	// as a stall. Only meaningful on the most recent turn.
+	InFlight      string // display text (command first line, else tool name)
+	InFlightSince time.Time
+	HasInFlight   bool
+
 	editedSet map[string]int // path -> edit count this turn
+	pending   []pendingUse   // tool_uses awaiting results, in file order
 	lastTimed time.Time
 	hasTimed  bool
+}
+
+type pendingUse struct {
+	use     ToolUse
+	at      time.Time
+	hasTime bool
 }
 
 // BuildResult is one build/test command outcome in a turn. Kind is "build" or
@@ -143,8 +158,22 @@ func BuildTurns(entries []Entry) []Turn {
 				case tu.Name == "AskUserQuestion" || tu.Name == "ExitPlanMode":
 					cur.Pending = tu.Name
 				}
+				// Track unresolved tool calls. Task/interactive tools are excluded:
+				// agents have their own detection (subagents dir) and a pending
+				// question is the Waiting state, not an in-flight tool.
+				if tu.ID != "" && tu.Name != "Task" && tu.Name != "AskUserQuestion" && tu.Name != "ExitPlanMode" {
+					cur.pending = append(cur.pending, pendingUse{use: tu, at: e.Time, hasTime: e.HasTime})
+				}
 			}
 		case KindToolResult:
+			if e.ToolUseID != "" {
+				for i := range cur.pending {
+					if cur.pending[i].use.ID == e.ToolUseID {
+						cur.pending = append(cur.pending[:i], cur.pending[i+1:]...)
+						break
+					}
+				}
+			}
 			if e.IsBash {
 				if kind := classifyCommand(e.ResultCommand); kind != "" {
 					cur.Builds = append(cur.Builds, BuildResult{
@@ -179,9 +208,34 @@ func BuildTurns(entries []Entry) []Turn {
 	}
 
 	if len(turns) > 0 {
-		turns[len(turns)-1].Open = lastTurnOpen(entries)
+		last := &turns[len(turns)-1]
+		last.Open = lastTurnOpen(entries)
+		// Surface the most recent still-executing SHELL call on the open turn.
+		// Only command-carrying tools get this: they legitimately run for
+		// minutes, whereas an instant tool (Write/Read) pending that long is a
+		// hang or an unanswered permission prompt — both deserve Stopped.
+		if last.Open {
+			for i := len(last.pending) - 1; i >= 0; i-- {
+				p := last.pending[i]
+				if p.use.Command == "" {
+					continue
+				}
+				last.InFlight = firstLine(p.use.Command)
+				if p.hasTime {
+					last.InFlightSince, last.HasInFlight = p.at, true
+				}
+				break
+			}
+		}
 	}
 	return turns
+}
+
+func firstLine(s string) string {
+	if i := indexOf(s, "\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // lastTurnOpen decides whether the most recent turn is still in progress by
