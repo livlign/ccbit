@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/livlign/ccbit/internal/gitx"
 	"github.com/livlign/ccbit/internal/input"
 	"github.com/livlign/ccbit/internal/sessions"
 	"github.com/livlign/ccbit/internal/state"
@@ -44,6 +45,17 @@ type Ctx struct {
 	// its per-turn file count.
 	TurnLinesAdded   int
 	TurnLinesRemoved int
+
+	// Tasks is the session's task-tool plan (TaskCreate/TaskUpdate replayed from
+	// the transcript): what Bit is working through and where it is.
+	Tasks transcript.TaskSummary
+
+	// ProjectLabel is this session's short project name (repo basename), used to
+	// spot a sibling session working the same repo (edit-collision risk).
+	ProjectLabel string
+
+	// Git is the repo's branch/dirty/ahead/behind snapshot for the ambient line.
+	Git gitx.Info
 }
 
 // Face returns the kaomoji for a state. Working and Agents animate via Frame;
@@ -142,25 +154,41 @@ func line1(v state.View, c Ctx) string {
 		if len(segs) > 0 {
 			base = "editing " + strings.Join(segs, " · ")
 		}
-		return base + elapsedSuffix(v) + longerThanUsual(v, c)
+		if t := taskClause(c.Tasks); t != "" {
+			base += " · " + t
+		}
+		return base + elapsedSuffix(v) + longerThanUsual(v, c) + loopNote(v.Turn)
 
 	case state.Agents:
 		s := pluralCount(v.AgentsRunning, "agent") + " running"
 		if v.AgentsDone > 0 {
 			s += fmt.Sprintf(" · %d done", v.AgentsDone)
 		}
+		if t := taskClause(c.Tasks); t != "" {
+			s += " · " + t
+		}
 		return s + elapsedSuffix(v)
 
 	case state.Waiting:
+		// How long it's been waiting is the user-behavior signal: a question
+		// sitting unanswered for long is a forgotten session.
+		if v.HasLastAge && v.LastAge >= time.Minute {
+			return "waiting on you · " + fmtAge(v.LastAge)
+		}
 		return "waiting on you"
 
 	case state.Failed:
 		kind, _ := failedKind(v.Turn.Builds)
 		proj := failedProject(v.Turn, c)
+		s := kind + " failed"
 		if proj != "" {
-			return fmt.Sprintf("%s %s failed", proj, kind)
+			s = fmt.Sprintf("%s %s failed", proj, kind)
 		}
-		return kind + " failed"
+		// A repeat offender is the "stop and look" cue: Bit is going in circles.
+		if v.Turn.FailStreak >= 3 {
+			s += fmt.Sprintf(" (%d× in a row)", v.Turn.FailStreak)
+		}
+		return s
 
 	case state.DoneNormal, state.DoneRedeemed:
 		return doneSentence(v, c)
@@ -181,6 +209,9 @@ func line2(c Ctx) string {
 	var parts []string
 	if d := dirLabel(c.In.CurrentDir); d != "" {
 		parts = append(parts, d)
+	}
+	if g := gitSegment(c.Git); g != "" {
+		parts = append(parts, g)
 	}
 	if c.In.ModelName != "" {
 		parts = append(parts, c.In.ModelName)
@@ -210,6 +241,17 @@ func siblingClause(c Ctx) string {
 	extra := 0
 	allDone := true // every named sibling is a fresh completion (pure good news)
 	for _, b := range others {
+		// Edit-collision risk outranks everything else worth saying about a
+		// sibling: another session actively working this same repo can race
+		// this one's changes.
+		if collision(b, c.ProjectLabel) {
+			phrase := siblingName(b) + " is also working this repo"
+			if c.ColorOn {
+				phrase = colorize(phrase, yellow)
+			}
+			named, allDone = append(named, phrase), false
+			continue
+		}
 		if !sessions.Notable(b, c.Now) {
 			continue
 		}
@@ -245,6 +287,15 @@ func siblingClause(c Ctx) string {
 		s += " — take a look"
 	}
 	return s
+}
+
+// collision reports a sibling actively working the same project as this session
+// — concurrent edits to one repo from two sessions can race each other.
+func collision(b sessions.Beat, project string) bool {
+	if project == "" || b.Project != project {
+		return false
+	}
+	return b.State == "working" || b.State == "agents"
 }
 
 // siblingPhrase is Bit naming one session and what it's doing — "Read and review
@@ -342,6 +393,17 @@ func doneSentence(v state.View, c Ctx) string {
 		}
 		sentences = append(sentences, w)
 	}
+	// Ship clauses: where the work went. "Committed, not pushed" doubles as a
+	// nudge that the remote hasn't seen it yet.
+	switch {
+	case v.Turn.Pushed:
+		sentences = append(sentences, "Pushed")
+	case v.Turn.Committed:
+		sentences = append(sentences, "Committed, not pushed")
+	}
+	if v.Turn.Deployed {
+		sentences = append(sentences, "Deploy triggered")
+	}
 	if len(sentences) == 0 {
 		return "done"
 	}
@@ -400,6 +462,38 @@ func pluralCount(n int, noun string) string {
 }
 
 // --- line-1 helpers ---
+
+// taskClause is Bit's read of the session plan: which task it's on and how far
+// through. Hidden when there's no plan or it's all done (nothing actionable).
+func taskClause(t transcript.TaskSummary) string {
+	if t.Total == 0 {
+		return ""
+	}
+	if t.Current != "" {
+		return fmt.Sprintf("task %d/%d: %s", min(t.Done+1, t.Total), t.Total, ellipsize(t.Current, 38))
+	}
+	if t.Done < t.Total {
+		return fmt.Sprintf("tasks %d/%d done", t.Done, t.Total)
+	}
+	return ""
+}
+
+// loopNote flags file churn: the same file reworked over and over this turn
+// usually means Bit is thrashing, not progressing.
+func loopNote(t transcript.Turn) string {
+	if t.HotFileEdits >= 4 {
+		return fmt.Sprintf(" (%s edited %d×)", filepath.Base(filepath.ToSlash(t.HotFile)), t.HotFileEdits)
+	}
+	return ""
+}
+
+func ellipsize(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
+}
 
 func elapsedSuffix(v state.View) string {
 	if v.HasElapsed && v.Elapsed > 0 {
@@ -495,6 +589,26 @@ func lastActivity(t transcript.Turn, root, projectDir string) string {
 }
 
 // --- line-2 helpers ---
+
+// gitSegment is where the work is going: "main* ↑2" = on main, uncommitted
+// changes, 2 commits not pushed. Each mark appears only when true, so a clean,
+// synced branch is just its name.
+func gitSegment(g gitx.Info) string {
+	if g.Branch == "" {
+		return ""
+	}
+	s := g.Branch
+	if g.Dirty > 0 {
+		s += "*"
+	}
+	if g.Ahead > 0 {
+		s += fmt.Sprintf(" ↑%d", g.Ahead)
+	}
+	if g.Behind > 0 {
+		s += fmt.Sprintf(" ↓%d", g.Behind)
+	}
+	return s
+}
 
 func dirLabel(dir string) string {
 	if dir == "" {

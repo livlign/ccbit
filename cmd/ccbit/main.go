@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/livlign/ccbit/internal/gitx"
 	"github.com/livlign/ccbit/internal/input"
 	"github.com/livlign/ccbit/internal/memory"
 	"github.com/livlign/ccbit/internal/render"
@@ -40,10 +41,12 @@ func main() {
 	var turns []transcript.Turn
 	var agents transcript.AgentInfo
 	var title string
+	var tasks transcript.TaskSummary
 	if in.TranscriptPath != "" {
 		if entries, err := transcript.ReadTail(in.TranscriptPath); err == nil {
 			turns = transcript.BuildTurns(entries)
 			title = transcript.LatestTitle(entries)
+			tasks = transcript.Tasks(entries)
 		}
 	}
 	turnStart, hasStart := currentTurnStart(turns)
@@ -110,11 +113,24 @@ func main() {
 		TypicalTurn:      stats.TypicalTurn(),
 		TurnLinesAdded:   turnAdded,
 		TurnLinesRemoved: turnRemoved,
+		Tasks:            tasks,
+		ProjectLabel:     label,
+		Git:              gitInfo(root, now),
 	}
 
 	for _, line := range render.Render(v, ctx) {
 		fmt.Println(line)
 	}
+}
+
+// gitInfo assembles the ambient git facts: branch from a plain .git/HEAD read
+// (every render), dirty/ahead/behind from a TTL-cached git status.
+func gitInfo(root string, now time.Time) gitx.Info {
+	g := gitx.Info{Branch: gitx.Branch(root)}
+	if g.Branch != "" {
+		g.Dirty, g.Ahead, g.Behind = gitx.Status(root, now)
+	}
+	return g
 }
 
 // newestClosedTurn returns the most recent finished turn (the current turn is

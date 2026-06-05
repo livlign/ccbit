@@ -40,6 +40,10 @@ type ToolUse struct {
 	FilePath     string // Edit/Write/MultiEdit/NotebookEdit
 	Command      string // Bash
 	SubagentType string // Task
+	Subject      string // TaskCreate
+	ActiveForm   string // TaskCreate
+	TaskID       string // TaskUpdate
+	Status       string // TaskUpdate / TaskCreate
 }
 
 // Entry is one parsed transcript line reduced to the fields ccbit needs.
@@ -95,6 +99,11 @@ type rawInput struct {
 	FilePath     string `json:"file_path"`
 	Command      string `json:"command"`
 	SubagentType string `json:"subagent_type"`
+	// TaskCreate / TaskUpdate (the session's plan, replayed by Tasks)
+	Subject    string `json:"subject"`
+	ActiveForm string `json:"activeForm"`
+	TaskID     string `json:"taskId"`
+	Status     string `json:"status"`
 }
 
 // ReadTail opens path, seeks to the last TailBytes, and parses each JSONL line
@@ -211,6 +220,10 @@ func fillAssistant(e *Entry, re rawEntry, uses map[string]ToolUse) {
 			FilePath:     in.FilePath,
 			Command:      in.Command,
 			SubagentType: in.SubagentType,
+			Subject:      in.Subject,
+			ActiveForm:   in.ActiveForm,
+			TaskID:       in.TaskID,
+			Status:       in.Status,
 		}
 		e.ToolUses = append(e.ToolUses, tu)
 		if b.ID != "" {

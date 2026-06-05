@@ -31,7 +31,20 @@ type Turn struct {
 	// turn — the basis for learning a per-project stall threshold.
 	MaxGap time.Duration
 
-	editedSet map[string]bool
+	// Loop signals: a file reworked over and over, or build/test failing
+	// repeatedly with no pass in between — the "going in circles, intervene"
+	// cues a glance can act on.
+	HotFile      string // most-edited file this turn
+	HotFileEdits int
+	FailStreak   int // consecutive failing build/test results at the turn's tail
+
+	// Ship signals, from successful Bash results: this turn committed, pushed,
+	// or triggered a deploy/CI run (Jenkins, gh workflow, kubectl, ...).
+	Committed bool
+	Pushed    bool
+	Deployed  bool
+
+	editedSet map[string]int // path -> edit count this turn
 	lastTimed time.Time
 	hasTimed  bool
 }
@@ -49,6 +62,14 @@ type BuildResult struct {
 var (
 	testRe  = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+test\b|npm\s+(run\s+)?test|yarn\s+test|pnpm\s+(run\s+)?test|\bpytest\b|\bjest\b|\bvitest\b|mvn\s+test|gradle\w*\s+\w*test)`)
 	buildRe = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+build\b|npm\s+run\s+build|yarn\s+build|pnpm\s+(run\s+)?build|\bmake\b|\bmsbuild\b|\btsc\b|gradle\w*\s+\w*build|mvn\s+(package|compile|install))`)
+
+	commitRe = regexp.MustCompile(`\bgit\b[^\n|;&]*\bcommit\b`)
+	pushRe   = regexp.MustCompile(`\bgit\b[^\n|;&]*\bpush\b`)
+	// deployRe recognizes common deploy/CI triggers without any configuration:
+	// Jenkins build URLs, GitHub workflow dispatch, k8s/container/IaC rollouts,
+	// and the usual "deploy" package scripts. Patterns are tool-anchored so a
+	// command merely mentioning "deploy" doesn't false-positive.
+	deployRe = regexp.MustCompile(`(?i)((curl|wget)[^\n]*jenkins[^\n]*/build|/job/[^\s"']+/build\b|\bgh\s+workflow\s+run\b|\bkubectl\s+(apply|rollout)\b|\bdocker\s+push\b|\bterraform\s+apply\b|\bhelm\s+(install|upgrade)\b|\b(sam|serverless|vercel|netlify|fly|railway)\s+deploy\b|\bnpm\s+run\s+deploy\b|\byarn\s+deploy\b)`)
 )
 
 func classifyCommand(cmd string) string {
@@ -76,7 +97,7 @@ func BuildTurns(entries []Entry) []Turn {
 	var cur *Turn
 
 	open := func(e Entry) {
-		turns = append(turns, Turn{editedSet: map[string]bool{}, PromptID: e.PromptID})
+		turns = append(turns, Turn{editedSet: map[string]int{}, PromptID: e.PromptID})
 		cur = &turns[len(turns)-1]
 		if e.HasTime {
 			cur.Start, cur.HasStart = e.Time, true
@@ -108,9 +129,14 @@ func BuildTurns(entries []Entry) []Turn {
 			for _, tu := range e.ToolUses {
 				switch {
 				case isEditTool(tu.Name):
-					if tu.FilePath != "" && !cur.editedSet[tu.FilePath] {
-						cur.editedSet[tu.FilePath] = true
-						cur.Edited = append(cur.Edited, tu.FilePath)
+					if tu.FilePath != "" {
+						if cur.editedSet[tu.FilePath] == 0 {
+							cur.Edited = append(cur.Edited, tu.FilePath)
+						}
+						cur.editedSet[tu.FilePath]++
+						if n := cur.editedSet[tu.FilePath]; n > cur.HotFileEdits {
+							cur.HotFile, cur.HotFileEdits = tu.FilePath, n
+						}
 					}
 				case tu.Name == "Task":
 					cur.Spawns++
@@ -124,6 +150,22 @@ func BuildTurns(entries []Entry) []Turn {
 					cur.Builds = append(cur.Builds, BuildResult{
 						Kind: kind, IsError: e.IsError, Command: e.ResultCommand, Text: e.ResultText,
 					})
+					if e.IsError {
+						cur.FailStreak++
+					} else {
+						cur.FailStreak = 0
+					}
+				}
+				if !e.IsError {
+					switch {
+					case pushRe.MatchString(e.ResultCommand):
+						cur.Pushed = true
+					case commitRe.MatchString(e.ResultCommand):
+						cur.Committed = true
+					}
+					if deployRe.MatchString(e.ResultCommand) {
+						cur.Deployed = true
+					}
 				}
 			}
 			if e.ResultToolName == "Task" || containsAgentID(e.ResultText) {
