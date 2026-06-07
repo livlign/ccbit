@@ -381,6 +381,8 @@ func lastTurnOpen(entries []Entry) bool {
 			return entries[i].StopReason != "end_turn"
 		case KindToolResult, KindUserPrompt:
 			return true
+		case KindInterrupt:
+			return false
 		}
 	}
 	return false

@@ -28,7 +28,8 @@ const (
 	KindUserPrompt
 	KindAssistant
 	KindToolResult
-	KindTitle // ai-title sidecar: the session's human-readable name
+	KindTitle     // ai-title sidecar: the session's human-readable name
+	KindInterrupt // synthetic "[Request interrupted by user]" marker: closes the turn
 )
 
 // ToolUse is a single tool invocation recorded on an assistant entry.
@@ -178,6 +179,12 @@ func parseLine(line []byte, uses map[string]ToolUse) (Entry, bool) {
 		}
 		if isStringContent(re.Message) {
 			e.Kind = KindUserPrompt
+			return e, true
+		}
+		// Interrupts arrive as a synthetic user entry with ARRAY content (so a
+		// typed prompt can never match), holding only the marker text.
+		if isInterrupt(re.Message) {
+			e.Kind = KindInterrupt
 			return e, true
 		}
 		return Entry{}, false
@@ -351,4 +358,16 @@ func hasToolUseResult(raw json.RawMessage) bool {
 func isStringContent(msg json.RawMessage) bool {
 	c := bytes.TrimSpace(messageContent(msg))
 	return len(c) > 0 && c[0] == '"'
+}
+
+func isInterrupt(msg json.RawMessage) bool {
+	for _, b := range decodeBlocks(messageContent(msg)) {
+		if b.Type == "text" {
+			switch b.Text {
+			case "[Request interrupted by user]", "[Request interrupted by user for tool use]":
+				return true
+			}
+		}
+	}
+	return false
 }
