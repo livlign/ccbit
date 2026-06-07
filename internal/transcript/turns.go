@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -75,27 +76,154 @@ type BuildResult struct {
 }
 
 var (
-	testRe  = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+test\b|npm\s+(run\s+)?test|yarn\s+test|pnpm\s+(run\s+)?test|\bpytest\b|\bjest\b|\bvitest\b|mvn\s+test|gradle\w*\s+\w*test)`)
-	buildRe = regexp.MustCompile(`(?i)(\b(go|dotnet|cargo)\s+build\b|npm\s+run\s+build|yarn\s+build|pnpm\s+(run\s+)?build|\bmake\b|\bmsbuild\b|\btsc\b|gradle\w*\s+\w*build|mvn\s+(package|compile|install))`)
-
 	commitRe = regexp.MustCompile(`\bgit\b[^\n|;&]*\bcommit\b`)
 	pushRe   = regexp.MustCompile(`\bgit\b[^\n|;&]*\bpush\b`)
 	// deployRe recognizes common deploy/CI triggers without any configuration:
 	// Jenkins build URLs, GitHub workflow dispatch, k8s/container/IaC rollouts,
 	// and the usual "deploy" package scripts. Patterns are tool-anchored so a
 	// command merely mentioning "deploy" doesn't false-positive.
-	deployRe = regexp.MustCompile(`(?i)((curl|wget)[^\n]*jenkins[^\n]*/build|/job/[^\s"']+/build\b|\bgh\s+workflow\s+run\b|\bkubectl\s+(apply|rollout)\b|\bdocker\s+push\b|\bterraform\s+apply\b|\bhelm\s+(install|upgrade)\b|\b(sam|serverless|vercel|netlify|fly|railway)\s+deploy\b|\bnpm\s+run\s+deploy\b|\byarn\s+deploy\b)`)
+	deployRe = regexp.MustCompile(`(?i)((curl|wget)[^\n]*jenkins[^\n]*/build|/job/[^\s"']+/build\b|\bgh\s+workflow\s+run\b|\bkubectl\s+(apply|rollout)\b|\bdocker\s+push\b|\bterraform\s+apply\b|\bhelm\s+(install|upgrade)\b|\b(sam|serverless|vercel|netlify|fly|flyctl|railway)\s+deploy\b|\bnpm\s+run\s+deploy\b|\byarn\s+deploy\b)`)
 )
 
+// Build/test gate detection. A command is a gate only if a known tool appears
+// with an allowed build/test subcommand (a binary alone is never enough), or a
+// known standalone runner appears as a token. Anything else classifies as ""
+// (no gate) — fail-safe by construction.
+var subcommandGates = map[string]map[string]string{
+	"go":         {"build": "build", "test": "test", "vet": "build"},
+	"dotnet":     {"build": "build", "test": "test"},
+	"cargo":      {"build": "build", "test": "test", "check": "build", "clippy": "build", "nextest": "test"},
+	"npm":        {"test": "test", "ci": "build"},
+	"pnpm":       {"build": "build", "test": "test", "lint": "build", "typecheck": "build"},
+	"yarn":       {"build": "build", "test": "test", "lint": "build", "typecheck": "build"},
+	"bun":        {"test": "test"},
+	"mvn":        {"test": "test", "verify": "test", "package": "build", "install": "build", "compile": "build"},
+	"mvnw":       {"test": "test", "verify": "test", "package": "build", "install": "build", "compile": "build"},
+	"gradle":     {"build": "build", "test": "test", "check": "test"},
+	"gradlew":    {"build": "build", "test": "test", "check": "test"},
+	"bazel":      {"build": "build", "test": "test"},
+	"make":       {"build": "build", "test": "test", "check": "test", "lint": "build", "ci": "test", "verify": "test"},
+	"just":       {"build": "build", "test": "test", "check": "test", "lint": "build", "ci": "test", "verify": "test"},
+	"swift":      {"build": "build", "test": "test"},
+	"deno":       {"test": "test", "lint": "build", "check": "build"},
+	"mix":        {"test": "test", "compile": "build"},
+	"rake":       {"test": "test", "build": "build"},
+	"sbt":        {"test": "test", "compile": "build"},
+	"xcodebuild": {"build": "build", "test": "test"},
+	"playwright": {"test": "test"},
+	"biome":      {"check": "build", "lint": "build", "ci": "build"},
+	"nx":         {"build": "build", "test": "test", "lint": "build", "typecheck": "build"},
+	"turbo":      {"build": "build", "test": "test", "lint": "build", "typecheck": "build"},
+	"cmake":      {"--build": "build"},
+}
+
+var runnerGates = map[string]string{
+	"pytest": "test", "tox": "test", "nox": "test", "jest": "test",
+	"vitest": "test", "mocha": "test", "rspec": "test", "phpunit": "test",
+	"ctest": "test", "gotestsum": "test",
+	"eslint": "build", "ruff": "build", "mypy": "build", "flake8": "build",
+	"golangci-lint": "build", "rubocop": "build", "tsc": "build",
+	"msbuild": "build", "pyright": "build", "pylint": "build",
+	"staticcheck": "build", "ninja": "build",
+}
+
+// runScriptTools dispatch package scripts via "run"; for them the script name
+// is the effective subcommand (npm run build), so "run" itself doesn't exclude.
+var runScriptTools = map[string]bool{
+	"npm": true, "pnpm": true, "yarn": true, "bun": true, "nx": true, "turbo": true,
+}
+
+var runScriptGates = map[string]string{
+	"build": "build", "test": "test", "lint": "build", "typecheck": "build", "check": "build",
+}
+
+var gateExcluded = map[string]bool{
+	"run": true, "serve": true, "start": true, "dev": true, "watch": true,
+}
+
 func classifyCommand(cmd string) string {
-	switch {
-	case testRe.MatchString(cmd):
-		return "test"
-	case buildRe.MatchString(cmd):
-		return "build"
-	default:
-		return ""
+	toks := strings.Fields(strings.ToLower(strings.ReplaceAll(cmd, ";", " ")))
+	verdict := ""
+	for i, t := range toks {
+		if t == "--watch" {
+			return ""
+		}
+		if strings.ContainsRune(t, '=') {
+			continue
+		}
+		name := binaryName(t)
+		if kind, ok := runnerGates[name]; ok {
+			verdict = strongerGate(verdict, kind)
+			continue
+		}
+		subs, ok := subcommandGates[name]
+		if !ok {
+			continue
+		}
+		sub, j := nextGateWord(toks, i+1)
+		if sub == "run" && runScriptTools[name] {
+			sub, _ = nextGateWord(toks, j+1)
+			if sub == "" {
+				continue
+			}
+			if gateExcluded[sub] {
+				return ""
+			}
+			verdict = strongerGate(verdict, runScriptGates[sub])
+			continue
+		}
+		if sub == "" {
+			continue
+		}
+		if gateExcluded[sub] {
+			return ""
+		}
+		verdict = strongerGate(verdict, subs[sub])
 	}
+	return verdict
+}
+
+func binaryName(t string) string {
+	if i := strings.LastIndexAny(t, `/\`); i >= 0 {
+		t = t[i+1:]
+	}
+	for _, ext := range []string{".exe", ".bat", ".cmd"} {
+		t = strings.TrimSuffix(t, ext)
+	}
+	return t
+}
+
+// nextGateWord finds the effective subcommand after a tool token: skips flags
+// and VAR=val args, stops at shell separators. "--build" passes through as a
+// word so cmake --build can match.
+func nextGateWord(toks []string, i int) (string, int) {
+	for ; i < len(toks); i++ {
+		t := toks[i]
+		switch t {
+		case "&&", "||", "|", "&":
+			return "", i
+		}
+		if strings.ContainsRune(t, '=') {
+			continue
+		}
+		if t != "--build" && (strings.HasPrefix(t, "-") || strings.HasPrefix(t, "+")) {
+			continue
+		}
+		return t, i
+	}
+	return "", len(toks)
+}
+
+// strongerGate keeps the test verdict over build, preserving the old
+// test-regex-first precedence for compound commands (go build && go test).
+func strongerGate(cur, kind string) string {
+	if cur == "test" || kind == "test" {
+		return "test"
+	}
+	if cur == "build" || kind == "build" {
+		return "build"
+	}
+	return ""
 }
 
 func isEditTool(name string) bool {
@@ -232,10 +360,8 @@ func BuildTurns(entries []Entry) []Turn {
 }
 
 func firstLine(s string) string {
-	if i := indexOf(s, "\n"); i >= 0 {
-		return s[:i]
-	}
-	return s
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 // lastTurnOpen decides whether the most recent turn is still in progress by
@@ -254,19 +380,5 @@ func lastTurnOpen(entries []Entry) bool {
 }
 
 func containsAgentID(s string) bool {
-	return len(s) > 0 && indexOf(s, "agentId:") >= 0
-}
-
-// indexOf avoids importing strings here for a single substring search.
-func indexOf(s, sub string) int {
-	n, m := len(s), len(sub)
-	if m == 0 {
-		return 0
-	}
-	for i := 0; i+m <= n; i++ {
-		if s[i:i+m] == sub {
-			return i
-		}
-	}
-	return -1
+	return strings.Contains(s, "agentId:")
 }

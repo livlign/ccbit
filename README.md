@@ -141,7 +141,7 @@ ccbit/
 ## Known limitations
 
 1. **Single-window only by design.** ccbit informs you about other sessions *within the window you're looking at*; it never reaches outside it (no OS notifications).
-2. **Build/test signal is exit-code only.** The line says succeeded/failed, never counts or reasons. Detection is heuristic keyword-matching on the command (`go test`, `npm run build`, `pytest`, `cargo`, …).
+2. **Build/test signal is exit-code only.** The line says succeeded/failed, never counts or reasons. Detection matches a fixed list of known tools: build/test subcommands of common toolchains (`go`, `cargo`, `dotnet`, `npm`/`pnpm`/`yarn`/`bun`, `mvn`, `gradle`, `bazel`, `make`/`just`, …) plus standalone runners (`pytest`, `jest`, `vitest`, `eslint`, `tsc`, …). Dev-loop commands (`dotnet run`, `npm start`, `make serve`, `--watch`) and anything unrecognized never count — fail-safe to Idle.
 3. **"Done" requires a build/test.** A turn that only edited files reads as Idle — its edit recap appears only once something built or tested.
 4. **Learned values need history.** Per-project insights stay silent until they have enough samples; brand-new projects get the fixed defaults.
 5. **Running-agent count is inferred**, not measured.
