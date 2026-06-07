@@ -89,6 +89,11 @@ func TestStatePriority(t *testing.T) {
 		// A turn that only shipped (commit/push, nothing edited) is done too.
 		{"done-commit-only", j(up(base, "x"), asstTool(base, tuBash("t1", "git commit -m x")), resPass(base, "t1"), asstEnd(base)), soon, DoneNormal},
 		// A turn that only read or answered stays idle (the "idle" case above).
+		// Quiet with NOTHING pending is the model thinking, not a stall — the
+		// transcript is silent during long extended-thinking stretches.
+		{"thinking-not-stopped", j(up(base, "x"), asstTool(base, tuBash("t1", "ls -la")), resPass(base, "t1")), stalled, Working},
+		// ...but silence past thinkGrace is presumed hung.
+		{"thinking-past-grace-stopped", j(up(base, "x"), asstTool(base, tuBash("t1", "ls -la")), resPass(base, "t1")), mustTime(base).Add(16 * time.Minute), Stopped},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -97,6 +102,19 @@ func TestStatePriority(t *testing.T) {
 				t.Fatalf("state = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestThinkingFlag(t *testing.T) {
+	quiet := j(up(base, "x"), asstTool(base, tuBash("t1", "ls -la")), resPass(base, "t1"))
+	v := derive(quiet, mustTime(base).Add(120*time.Second))
+	if v.State != Working || !v.Thinking {
+		t.Fatalf("state=%v thinking=%v, want quiet floor to read as Working+Thinking", v.State, v.Thinking)
+	}
+	// Fresh activity: working, but not flagged as a long think.
+	v = derive(quiet, mustTime(base).Add(10*time.Second))
+	if v.State != Working || v.Thinking {
+		t.Fatalf("state=%v thinking=%v, want plain Working before the stall threshold", v.State, v.Thinking)
 	}
 }
 

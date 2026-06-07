@@ -58,6 +58,12 @@ type Turn struct {
 	InFlightSince time.Time
 	HasInFlight   bool
 
+	// PendingTools counts unresolved tool_uses of any kind. Zero on a quiet
+	// open turn means the model has the floor (composing/thinking); nonzero
+	// means something dispatched never came back — a hang or an unanswered
+	// permission prompt. Only meaningful on the most recent turn.
+	PendingTools int
+
 	editedSet map[string]int // path -> edit count this turn
 	pending   []pendingUse   // tool_uses awaiting results, in file order
 	lastTimed time.Time
@@ -345,6 +351,7 @@ func BuildTurns(entries []Entry) []Turn {
 	if len(turns) > 0 {
 		last := &turns[len(turns)-1]
 		last.Open = lastTurnOpen(entries)
+		last.PendingTools = len(last.pending)
 		// Surface the most recent still-executing SHELL call on the open turn.
 		// Only command-carrying tools get this: they legitimately run for
 		// minutes, whereas an instant tool (Write/Read) pending that long is a

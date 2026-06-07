@@ -54,11 +54,11 @@ Bit's face maps to the session state (first match wins, in priority order), and 
 
 | Priority | State | Face | When |
 |---|---|---|---|
-| 1 | Stopped | `(¬°-°)¬` | a turn is open but has gone quiet past the stall threshold (and isn't waiting on you or running agents) |
+| 1 | Stopped | `(¬°-°)¬` | a quiet open turn with a dispatched tool that never answered (hang or unnoticed permission prompt), or silence past any plausible thinking stretch (~15m) |
 | 2 | Failed | <code>(╯°□°)╯︵&nbsp;┻━┻</code> | the latest build/test errored |
 | 3 | Waiting on you | `(◕_◕)?` | a question or plan is awaiting your answer |
 | 4 | Agents running | <code>┏(•&#95;•)┛&nbsp;⇄&nbsp;┗(•&#95;•)┓</code> | subagents are in flight |
-| 5 | Working | <code>-(๏&#95;๏)-&nbsp;⇄&nbsp;৲(๏&#95;๏)৲</code> | a turn is in progress |
+| 5 | Working | <code>-(๏&#95;๏)-&nbsp;⇄&nbsp;৲(๏&#95;๏)৲</code> | a turn is in progress; long silent stretches with nothing pending show as `thinking (2m31s)` rather than decaying into Stopped |
 | 6 | Done (recovered) | `(→_←")` | idle, and a build/test passed this turn after an earlier failure |
 | 7 | Done | `(つ•‿•)つ` | the turn finished having edited, committed/pushed/deployed, or passed a build/test |
 | 8 | Idle | `(•_•)` | nothing else applies (e.g. a turn that only read or answered) |

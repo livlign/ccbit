@@ -56,6 +56,18 @@ func TestTaskClause(t *testing.T) {
 	}
 }
 
+func TestThinkingClause(t *testing.T) {
+	v := state.View{State: state.Working, Thinking: true, HasLastAge: true, LastAge: 2*time.Minute + 31*time.Second}
+	got := Render(v, ctx())[0]
+	if !strings.Contains(got, "thinking (2m31s)") {
+		t.Fatalf("working line = %q, want thinking note", got)
+	}
+	v.Thinking = false
+	if got = Render(v, ctx())[0]; strings.Contains(got, "thinking") {
+		t.Fatalf("non-thinking working line = %q, should have no note", got)
+	}
+}
+
 func TestRunningClause(t *testing.T) {
 	v := state.View{State: state.Working, HasInFlight: true,
 		InFlight: `dotnet list "D:\proj\x.sln" package --vulnerable --include-transitive`, InFlightFor: 3*time.Minute + 18*time.Second}

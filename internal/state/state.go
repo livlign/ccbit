@@ -48,6 +48,13 @@ func (s State) String() string {
 // silent; only beyond that is the session presumed hung.
 const toolGrace = 15 * time.Minute
 
+// thinkGrace bounds how long a quiet turn with NOTHING pending stays Working.
+// The transcript is silent while the model composes — extended thinking runs
+// minutes without a single entry — and a permission prompt always leaves a
+// pending tool_use behind, so bare silence is almost always thinking, not a
+// stall. Past this ceiling it's presumed hung.
+const thinkGrace = 15 * time.Minute
+
 // DefaultStall is how long an open turn may go without a new entry before it is
 // considered Stopped. Set above the typical gap of a long pure-text generation
 // (which writes no transcript entries while composing) to avoid false stalls;
@@ -70,6 +77,11 @@ type View struct {
 	InFlight    string
 	InFlightFor time.Duration
 	HasInFlight bool
+
+	// Thinking is a quiet Working turn with nothing pending: the model has the
+	// floor and is composing. The render notes it so the silence reads as
+	// deliberate ("thinking (2m)") rather than decaying into a false Stopped.
+	Thinking bool
 }
 
 // Derive computes the View from the full ordered list of turns and subagent
@@ -126,8 +138,12 @@ func Derive(turns []transcript.Turn, now time.Time, stall time.Duration, agents 
 
 	latestErr, earlierErr, hasBuild := analyzeBuilds(cur.Builds)
 
+	quiet := cur.Open && stalled && cur.Pending == "" && running == 0 && !toolActive
 	switch {
-	case cur.Open && stalled && cur.Pending == "" && running == 0 && !toolActive:
+	// Quiet with something dispatched and unanswered (instant tool with no
+	// result: a permission prompt or a hang) stops at the stall threshold;
+	// quiet with nothing pending is the model thinking and gets thinkGrace.
+	case quiet && (cur.PendingTools > 0 || v.LastAge > thinkGrace):
 		v.State = Stopped
 	case hasBuild && latestErr:
 		v.State = Failed
@@ -137,6 +153,7 @@ func Derive(turns []transcript.Turn, now time.Time, stall time.Duration, agents 
 		v.State = Agents
 	case cur.Open:
 		v.State = Working
+		v.Thinking = quiet
 	case hasBuild && !latestErr && earlierErr:
 		v.State = DoneRedeemed
 	case hasBuild && !latestErr:

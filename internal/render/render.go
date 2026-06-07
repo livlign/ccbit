@@ -169,6 +169,9 @@ func line1(v state.View, c Ctx) string {
 		if r := runningClause(v); r != "" {
 			base += " · " + r
 		}
+		if v.Thinking && v.HasLastAge {
+			base += " · thinking (" + fmtDur(v.LastAge) + ")"
+		}
 		return base + elapsedSuffix(v) + longerThanUsual(v, c) + loopNote(v.Turn)
 
 	case state.Agents:
