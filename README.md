@@ -2,6 +2,8 @@
 
 A session-awareness status line for [Claude Code](https://claude.com/claude-code), led by a stateful kaomoji face named **Bit**. On every render Bit reads the session transcript, works out what's happening, and narrates it in a line or two — like a small secretary sitting on the bottom row of your terminal.
 
+![ccbit — a status line that reads your session. One coding turn narrated by Bit: working in cyan, a build failure with a table-flip face, recovery with "Build green again.", a done summary with files edited and tests passed, idle with alerts from other sessions — ending on all 8 states: working, agents running, waiting on you, failed, done, done-recovered, stopped, idle.](docs/hero.gif)
+
 ccbit answers, at a glance: *is anything working, done, waiting, broken, or stopped here — what just changed, what's happening in my other sessions, and is this turn behaving normally?*
 
 ```
