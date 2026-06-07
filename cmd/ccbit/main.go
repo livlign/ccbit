@@ -26,6 +26,10 @@ import (
 	"github.com/livlign/ccbit/internal/transcript"
 )
 
+// version is stamped by the release pipeline (goreleaser ldflags); "dev" for
+// local builds.
+var version = "dev"
+
 func main() {
 	now := time.Now()
 	in := input.Parse(os.Stdin)

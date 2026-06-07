@@ -13,7 +13,20 @@ It is a single Go binary. **No hooks, no daemons.** The transcript is the source
 
 ## Install
 
-Requires Go 1.26+ to build, and Claude Code ≥ v2.1.153 (for the `COLUMNS` width hint).
+Requires Claude Code ≥ v2.1.153 (for the `COLUMNS` width hint). No Go toolchain needed — this fetches a prebuilt binary (macOS/Linux, amd64/arm64) and configures the status line:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/livlign/ccbit/main/install.sh | bash
+```
+
+Open a new Claude Code session to see Bit. A settings file may only define **one** `statusLine`; if you already have one, the installer replaces it (your previous `settings.json` is backed up first).
+
+On Windows, grab `ccbit_windows_amd64.zip` (or `arm64`) from the [latest release](https://github.com/livlign/ccbit/releases/latest) and point your status line at the extracted `ccbit.exe`.
+
+<details>
+<summary>Manual setup / build from source</summary>
+
+Building from source requires Go 1.26+:
 
 ```sh
 go build -o ~/.claude/ccbit/ccbit ./cmd/ccbit
@@ -31,7 +44,7 @@ Then point your status line at it in `~/.claude/settings.json`:
 }
 ```
 
-Open a new Claude Code session to see Bit. A settings file may only define **one** `statusLine`; if you already have one, this replaces it.
+</details>
 
 ## What Bit says
 
