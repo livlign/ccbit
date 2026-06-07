@@ -40,6 +40,12 @@ const (
 	// "come take a look" at a sibling. It self-clears earlier when you switch to
 	// that session and prompt it (working again resets the completion stamp).
 	doneWindow = 10 * time.Minute
+	// liveWindow bounds how stale a heartbeat can be while its completion still
+	// earns a nudge. Beats land ~1×/s while a session runs, so a closed terminal
+	// goes silent within this window instead of riding out the full activeWindow
+	// — there is nothing left to "take a look" at. Alerts are exempt: a crashed
+	// session needs you precisely because it stopped beating.
+	liveWindow = 45 * time.Second
 )
 
 // State classes group the eight derived states by what they mean for a sibling
@@ -174,8 +180,11 @@ func completionStamp(prev Beat, newState string, now time.Time) int64 {
 }
 
 // JustCompleted reports whether this session finished a turn recently enough to
-// still be worth a "come take a look" nudge.
+// still be worth a "come take a look" nudge — and is still alive to look at.
 func JustCompleted(b Beat, now time.Time) bool {
+	if now.Sub(time.Unix(b.UpdatedAt, 0)) > liveWindow {
+		return false
+	}
 	return b.DoneSince > 0 && now.Sub(time.Unix(b.DoneSince, 0)) <= doneWindow
 }
 

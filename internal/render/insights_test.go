@@ -11,26 +11,48 @@ import (
 	"github.com/livlign/ccbit/internal/transcript"
 )
 
-func TestTaskClauseOnWorking(t *testing.T) {
-	c := ctx()
-	c.Tasks = transcript.TaskSummary{Total: 7, Done: 2, Current: "Wiring auth flow"}
-	v := state.View{State: state.Working, Turn: transcript.Turn{Edited: []string{"D:/proj/a/x.go"}}}
-	got := Render(v, c)[0]
-	if !strings.Contains(got, "task 3/7: Wiring auth flow") {
-		t.Fatalf("working line = %q, want task clause", got)
+func TestTaskClause(t *testing.T) {
+	cases := []struct {
+		name    string
+		state   state.State
+		tasks   transcript.TaskSummary
+		touched bool   // current turn created/updated a task
+		want    string // "" means the line must not contain a todo fragment
+	}{
+		{"working partial", state.Working, transcript.TaskSummary{Total: 7, Done: 3}, false, "3/7 todos"},
+		{"working none done", state.Working, transcript.TaskSummary{Total: 7, Done: 0}, false, "0/7 todos"},
+		{"working all done this turn", state.Working, transcript.TaskSummary{Total: 7, Done: 7}, true, "7/7 todos"},
+		{"working all done earlier turn", state.Working, transcript.TaskSummary{Total: 7, Done: 7}, false, ""},
+		{"working current ignored", state.Working, transcript.TaskSummary{Total: 7, Done: 2, Current: "Wiring auth flow"}, false, "2/7 todos"},
+		{"working no plan", state.Working, transcript.TaskSummary{}, true, ""},
+		{"agents partial", state.Agents, transcript.TaskSummary{Total: 5, Done: 2}, false, "2/5 todos"},
+		{"agents all done earlier turn", state.Agents, transcript.TaskSummary{Total: 5, Done: 5}, false, ""},
+		{"idle with plan", state.Idle, transcript.TaskSummary{Total: 7, Done: 3}, true, ""},
+		{"done with plan", state.DoneNormal, transcript.TaskSummary{Total: 7, Done: 3}, true, ""},
+		{"failed with plan", state.Failed, transcript.TaskSummary{Total: 7, Done: 3}, true, ""},
+		{"waiting with plan", state.Waiting, transcript.TaskSummary{Total: 7, Done: 3}, true, ""},
+		{"stopped with plan", state.Stopped, transcript.TaskSummary{Total: 7, Done: 3}, true, ""},
 	}
-
-	// No in-progress label: show plain progress while work remains.
-	c.Tasks = transcript.TaskSummary{Total: 4, Done: 1}
-	got = Render(v, c)[0]
-	if !strings.Contains(got, "tasks 1/4 done") {
-		t.Fatalf("working line = %q, want tasks 1/4 done", got)
-	}
-
-	// All done or no plan: silent.
-	c.Tasks = transcript.TaskSummary{Total: 4, Done: 4}
-	if got = Render(v, c)[0]; strings.Contains(got, "task") {
-		t.Fatalf("completed plan should be silent, got %q", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := ctx()
+			c.Tasks = tc.tasks
+			v := state.View{State: tc.state, Turn: transcript.Turn{
+				Edited:      []string{"D:/proj/a/x.go"},
+				Builds:      []transcript.BuildResult{{Kind: "test", IsError: tc.state == state.Failed}},
+				TaskTouched: tc.touched,
+			}}
+			got := Render(v, c)[0]
+			if tc.want == "" {
+				if strings.Contains(got, "todos") {
+					t.Fatalf("line = %q, want no todo fragment", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("line = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -117,7 +139,7 @@ func TestDoneShipClauses(t *testing.T) {
 func TestCompletionNudgeReadReceipt(t *testing.T) {
 	c := ctx()
 	doneAt := c.Now.Add(-2 * time.Minute)
-	c.Siblings = []sessions.Beat{{SessionID: "x", State: "idle", Project: "web", Title: "Fix login", DoneSince: doneAt.Unix()}}
+	c.Siblings = []sessions.Beat{{SessionID: "x", State: "idle", Project: "web", Title: "Fix login", DoneSince: doneAt.Unix(), UpdatedAt: c.Now.Unix()}}
 
 	// News arrived after the user's last prompt here: nudge shows.
 	c.LastPromptAt = doneAt.Add(-10 * time.Minute)

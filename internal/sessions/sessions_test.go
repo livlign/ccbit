@@ -107,8 +107,13 @@ func TestCompletionStampLifecycle(t *testing.T) {
 	if b.DoneSince != finished.Unix() {
 		t.Fatalf("DoneSince = %d, want %d (working->idle stamp)", b.DoneSince, finished.Unix())
 	}
-	if !JustCompleted(b, finished.Add(time.Minute)) {
-		t.Fatal("should read as just-completed within the window")
+	if !JustCompleted(b, finished.Add(30*time.Second)) {
+		t.Fatal("should read as just-completed while still beating")
+	}
+	// That beat is from `finished`; a minute later with no fresh beat the
+	// session is gone, and a dead session's completion earns no nudge.
+	if JustCompleted(b, finished.Add(time.Minute)) {
+		t.Fatal("a session that stopped beating must not nudge")
 	}
 
 	// Staying at rest carries the stamp forward (does not refresh it).

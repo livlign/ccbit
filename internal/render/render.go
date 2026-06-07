@@ -160,7 +160,7 @@ func line1(v state.View, c Ctx) string {
 		if len(segs) > 0 {
 			base = "editing " + strings.Join(segs, " · ")
 		}
-		if t := taskClause(c.Tasks); t != "" {
+		if t := taskClause(c.Tasks, v.Turn.TaskTouched); t != "" {
 			base += " · " + t
 		}
 		// A command that's been executing a while is THE thing to say — it
@@ -176,7 +176,7 @@ func line1(v state.View, c Ctx) string {
 		if v.AgentsDone > 0 {
 			s += fmt.Sprintf(" · %d done", v.AgentsDone)
 		}
-		if t := taskClause(c.Tasks); t != "" {
+		if t := taskClause(c.Tasks, v.Turn.TaskTouched); t != "" {
 			s += " · " + t
 		}
 		return s + elapsedSuffix(v)
@@ -487,19 +487,15 @@ func pluralCount(n int, noun string) string {
 
 // --- line-1 helpers ---
 
-// taskClause is Bit's read of the session plan: which task it's on and how far
-// through. Hidden when there's no plan or it's all done (nothing actionable).
-func taskClause(t transcript.TaskSummary) string {
-	if t.Total == 0 {
+// taskClause is Bit's read of the session plan: how far through the todo
+// list. An unfinished plan stays relevant across turns (it will be resumed);
+// a completed one is only news during the turn that completed it — on later
+// turns it's stale and stays silent.
+func taskClause(t transcript.TaskSummary, touched bool) string {
+	if t.Total == 0 || (t.Done == t.Total && !touched) {
 		return ""
 	}
-	if t.Current != "" {
-		return fmt.Sprintf("task %d/%d: %s", min(t.Done+1, t.Total), t.Total, ellipsize(t.Current, 38))
-	}
-	if t.Done < t.Total {
-		return fmt.Sprintf("tasks %d/%d done", t.Done, t.Total)
-	}
-	return ""
+	return fmt.Sprintf("%d/%d todos", t.Done, t.Total)
 }
 
 // runningClause names a tool call that has been executing for a while —

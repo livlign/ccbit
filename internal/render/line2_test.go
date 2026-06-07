@@ -124,7 +124,7 @@ func TestSiblingClauseCompletion(t *testing.T) {
 	now := c.Now
 	// A sibling that just finished a turn gets a full sentence and the nudge.
 	c.Siblings = []sessions.Beat{
-		{State: "idle", Project: "web", Title: "Read and review project", DoneSince: now.Add(-30 * time.Second).Unix()},
+		{State: "idle", Project: "web", Title: "Read and review project", DoneSince: now.Add(-30 * time.Second).Unix(), UpdatedAt: now.Unix()},
 	}
 	want := `The session "Read and review project" has new updates — take a look`
 	if got := siblingClause(c); got != want {
@@ -134,7 +134,7 @@ func TestSiblingClauseCompletion(t *testing.T) {
 	// An alert alongside a completion: alert leads, no nudge.
 	c.Siblings = []sessions.Beat{
 		{State: "failed", Project: "api"},
-		{State: "done", Project: "web", DoneSince: now.Add(-30 * time.Second).Unix()},
+		{State: "done", Project: "web", DoneSince: now.Add(-30 * time.Second).Unix(), UpdatedAt: now.Unix()},
 	}
 	if got := siblingClause(c); got != "Elsewhere: api crashed, web has new updates" {
 		t.Fatalf("mixed clause = %q", got)
@@ -142,10 +142,28 @@ func TestSiblingClauseCompletion(t *testing.T) {
 
 	// A stale completion (older than the window) is benign; a lone one is silent.
 	c.Siblings = []sessions.Beat{
-		{State: "idle", Project: "web", DoneSince: now.Add(-30 * time.Minute).Unix()},
+		{State: "idle", Project: "web", DoneSince: now.Add(-30 * time.Minute).Unix(), UpdatedAt: now.Unix()},
 	}
 	if got := siblingClause(c); got != "" {
 		t.Fatalf("stale lone completion should be silent, got %q", got)
+	}
+
+	// A closed session (heartbeat stopped) must not nudge, however fresh the
+	// completion — there is no window left to take a look at.
+	c.Siblings = []sessions.Beat{
+		{State: "idle", Project: "web", DoneSince: now.Add(-30 * time.Second).Unix(), UpdatedAt: now.Add(-2 * time.Minute).Unix()},
+	}
+	if got := siblingClause(c); got != "" {
+		t.Fatalf("dead session should not nudge, got %q", got)
+	}
+
+	// Alerts are exempt from liveness: a crashed session needs you precisely
+	// because it stopped beating.
+	c.Siblings = []sessions.Beat{
+		{State: "failed", Project: "api", UpdatedAt: now.Add(-2 * time.Minute).Unix()},
+	}
+	if got := siblingClause(c); got != "api crashed" && !strings.Contains(got, "crashed") {
+		t.Fatalf("stale alert should still show, got %q", got)
 	}
 }
 

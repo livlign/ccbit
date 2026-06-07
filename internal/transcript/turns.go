@@ -45,6 +45,11 @@ type Turn struct {
 	Pushed    bool
 	Deployed  bool
 
+	// TaskTouched is true when this turn created or updated a plan task — the
+	// freshness signal that keeps a fully-completed plan from lingering on
+	// later turns' lines.
+	TaskTouched bool
+
 	// InFlight is a tool call still executing: its tool_use is flushed (current
 	// CC writes it at execution start) but no result has arrived. Long commands
 	// run minutes while the transcript stays silent — without this, they read
@@ -285,6 +290,8 @@ func BuildTurns(entries []Entry) []Turn {
 					cur.Spawns++
 				case tu.Name == "AskUserQuestion" || tu.Name == "ExitPlanMode":
 					cur.Pending = tu.Name
+				case tu.Name == "TaskCreate" || tu.Name == "TaskUpdate":
+					cur.TaskTouched = true
 				}
 				// Track unresolved tool calls. Task/interactive tools are excluded:
 				// agents have their own detection (subagents dir) and a pending
