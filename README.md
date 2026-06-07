@@ -60,7 +60,7 @@ Bit's face maps to the session state (first match wins, in priority order), and 
 | 4 | Agents running | <code>┏(•&#95;•)┛&nbsp;⇄&nbsp;┗(•&#95;•)┓</code> | subagents are in flight |
 | 5 | Working | <code>-(๏&#95;๏)-&nbsp;⇄&nbsp;৲(๏&#95;๏)৲</code> | a turn is in progress |
 | 6 | Done (recovered) | `(→_←")` | idle, and a build/test passed this turn after an earlier failure |
-| 7 | Done | `(つ•‿•)つ` | idle, and a build/test passed this turn |
+| 7 | Done | `(つ•‿•)つ` | the turn finished having edited, committed/pushed/deployed, or passed a build/test |
 | 8 | Idle | `(•_•)` | nothing else applies (e.g. a turn that only read or answered) |
 
 Bit recaps in plain sentences rather than a row of glyphs:
@@ -155,8 +155,7 @@ ccbit/
 
 1. **Single-window only by design.** ccbit informs you about other sessions *within the window you're looking at*; it never reaches outside it (no OS notifications).
 2. **Build/test signal is exit-code only.** The line says succeeded/failed, never counts or reasons. Detection matches a fixed list of known tools: build/test subcommands of common toolchains (`go`, `cargo`, `dotnet`, `npm`/`pnpm`/`yarn`/`bun`, `mvn`, `gradle`, `bazel`, `make`/`just`, …) plus standalone runners (`pytest`, `jest`, `vitest`, `eslint`, `tsc`, …). Dev-loop commands (`dotnet run`, `npm start`, `make serve`, `--watch`) and anything unrecognized never count — fail-safe to Idle.
-3. **"Done" requires a build/test.** A turn that only edited files reads as Idle — its edit recap appears only once something built or tested.
-4. **Learned values need history.** Per-project insights stay silent until they have enough samples; brand-new projects get the fixed defaults.
-5. **Running-agent count is inferred**, not measured.
-6. **Width fallbacks are heuristic** (`COLUMNS`-based); terminals that don't set `COLUMNS` are assumed wide.
+3. **Learned values need history.** Per-project insights stay silent until they have enough samples; brand-new projects get the fixed defaults.
+4. **Running-agent count is inferred**, not measured.
+5. **Width fallbacks are heuristic** (`COLUMNS`-based); terminals that don't set `COLUMNS` are assumed wide.
 ```

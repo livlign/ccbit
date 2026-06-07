@@ -84,6 +84,11 @@ func TestStatePriority(t *testing.T) {
 		{"inflight-tool-not-stopped", j(up(base, "x"), asstTool(base, tuBash("t1", "dotnet list pkg --vulnerable"))), stalled, Working},
 		// Failed outranks an in-progress (open) next action.
 		{"failed-outranks-working", j(up(base, "x"), asstTool(base, tuBash("t1", "dotnet build")), resFail(base, "t1"), asstTool(base, tuWrite("t2", "D:/proj/a/x.go"))), soon, Failed},
+		// A turn that only edited (docs, configs — no build step) is still done.
+		{"done-edit-only", j(up(base, "x"), asstTool(base, tuWrite("t1", "D:/proj/a/README.md")), resPass(base, "t1"), asstEnd(base)), soon, DoneNormal},
+		// A turn that only shipped (commit/push, nothing edited) is done too.
+		{"done-commit-only", j(up(base, "x"), asstTool(base, tuBash("t1", "git commit -m x")), resPass(base, "t1"), asstEnd(base)), soon, DoneNormal},
+		// A turn that only read or answered stays idle (the "idle" case above).
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

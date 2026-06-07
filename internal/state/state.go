@@ -141,6 +141,11 @@ func Derive(turns []transcript.Turn, now time.Time, stall time.Duration, agents 
 		v.State = DoneRedeemed
 	case hasBuild && !latestErr:
 		v.State = DoneNormal
+	case len(cur.Edited) > 0 || cur.Committed || cur.Pushed || cur.Deployed:
+		// Plenty of turns never build or test (docs, configs, commit-and-push):
+		// finishing with edits or a ship action is still a done turn worth a
+		// recap, not a blank idle.
+		v.State = DoneNormal
 	default:
 		v.State = Idle
 	}
