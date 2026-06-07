@@ -70,7 +70,7 @@ Bit recaps in plain sentences rather than a row of glyphs:
 ```
 (つ•‿•)つ 4 files edited, line changes: +885/-99. Build succeeded. Tests succeeded.
 (→_←")  2 files edited. Build green again.
--(๏_๏)- editing ccbit (3 files) · 2m14s
+-(๏_๏)- editing ccbit (3 files) · 1/4 todos · 2m14s
 (╯°□°)╯︵ ┻━┻ ccbit build failed
 (¬°-°)¬ stopped · last: editing render.go · 2m ago
 ```
