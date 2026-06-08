@@ -54,6 +54,12 @@ type Ctx struct {
 	// spot a sibling session working the same repo (edit-collision risk).
 	ProjectLabel string
 
+	// SelfTitle is this session's own ai-title. A sibling heartbeat carrying the
+	// same title is the same work — a resumed/forked session, or a duplicate
+	// heartbeat — never a distinct window worth naming, so it's filtered out
+	// (naming the session you're in is always redundant).
+	SelfTitle string
+
 	// LastPromptAt is when the user last submitted a prompt in THIS session —
 	// the interaction read-receipt: any sibling news older than this has been on
 	// the status line while the user was demonstrably at this window, so it's
@@ -248,6 +254,18 @@ func line2(c Ctx) string {
 // mentioning. Empty when no other session is live.
 func siblingClause(c Ctx) string {
 	others := c.Siblings
+	// Drop any sibling that shares this session's title: it's the same work
+	// (resume/fork/dupe heartbeat), and naming the window you're in is redundant.
+	if c.SelfTitle != "" {
+		kept := make([]sessions.Beat, 0, len(others))
+		for _, b := range others {
+			if b.Title == c.SelfTitle {
+				continue
+			}
+			kept = append(kept, b)
+		}
+		others = kept
+	}
 	if len(others) == 0 {
 		return ""
 	}

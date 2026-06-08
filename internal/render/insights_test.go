@@ -170,6 +170,23 @@ func TestCompletionNudgeReadReceipt(t *testing.T) {
 	}
 }
 
+func TestSameTitleSiblingSuppressed(t *testing.T) {
+	c := ctx()
+	c.SelfTitle = "Fix ccbit hook script file paths"
+	c.ProjectLabel = "ccbit"
+	// A heartbeat with this session's own title (dupe/resume/test pollution)
+	// must never be named — not as a collision, not as anything.
+	c.Siblings = []sessions.Beat{{SessionID: "other", State: "working", Project: "ccbit", Title: "Fix ccbit hook script file paths"}}
+	if got := Render(state.View{State: state.Working}, c)[0]; strings.Contains(got, "also working") || strings.Contains(got, "Elsewhere") || strings.Contains(got, "session") {
+		t.Fatalf("same-title sibling should be suppressed, got %q", got)
+	}
+	// A genuinely different session on the same repo still warns.
+	c.Siblings = []sessions.Beat{{SessionID: "other", State: "working", Project: "ccbit", Title: "Refactor parser"}}
+	if got := Render(state.View{State: state.Working}, c)[0]; !strings.Contains(got, "also working this repo") {
+		t.Fatalf("distinct same-repo session should warn, got %q", got)
+	}
+}
+
 func TestSameRepoCollision(t *testing.T) {
 	c := ctx()
 	c.ProjectLabel = "ccbit"
