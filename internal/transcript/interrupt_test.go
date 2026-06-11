@@ -20,6 +20,21 @@ func TestInterruptClosesTurn(t *testing.T) {
 	}
 }
 
+func TestInterruptThenStragglerResultStaysClosed(t *testing.T) {
+	// Interrupting a running tool: the interrupt marker lands first, then the
+	// tool's result still flushes in. The trailing result must not re-open the
+	// turn — Bit must not read "working" after an Esc.
+	prompt := `{"type":"user","timestamp":"` + taskTS + `","promptId":"p1","message":{"role":"user","content":"run it"}}`
+	use := `{"type":"assistant","timestamp":"` + taskTS + `","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"sleep 60"}}]}}`
+	marker := `{"type":"user","timestamp":"` + taskTS + `","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	straggler := `{"type":"user","timestamp":"` + taskTS + `","toolUseResult":{"x":1},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1","is_error":false,"content":"done"}]}}`
+
+	turns := BuildTurns(parseFixture(prompt, use, marker, straggler))
+	if len(turns) != 1 || turns[0].Open {
+		t.Fatalf("turns = %+v, want one closed turn after interrupt + straggler result", turns)
+	}
+}
+
 func TestInterruptEscVariant(t *testing.T) {
 	prompt := `{"type":"user","timestamp":"` + taskTS + `","promptId":"p1","message":{"role":"user","content":"hi"}}`
 	marker := `{"type":"user","timestamp":"` + taskTS + `","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`

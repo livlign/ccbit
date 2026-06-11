@@ -379,20 +379,29 @@ func firstLine(s string) string {
 }
 
 // lastTurnOpen decides whether the most recent turn is still in progress by
-// inspecting the last meaningful entry: an assistant end_turn closes the turn;
-// a pending tool_use, a tool result, or a fresh user prompt keep it open.
+// scanning back to the nearest decisive entry: an assistant end_turn closes the
+// turn, a pending tool_use or a fresh user prompt keeps it open, an interrupt
+// closes it. A tool result is NOT decisive on its own — when a tool is
+// interrupted mid-run its result still flushes in after the interrupt marker, so
+// stopping at that trailing result would re-open an interrupted turn. Skip past
+// tool results to the signal that says whether the model has unfinished work.
 func lastTurnOpen(entries []Entry) bool {
+	sawToolResult := false
 	for i := len(entries) - 1; i >= 0; i-- {
 		switch entries[i].Kind {
 		case KindAssistant:
 			return entries[i].StopReason != "end_turn"
-		case KindToolResult, KindUserPrompt:
+		case KindUserPrompt:
 			return true
 		case KindInterrupt:
 			return false
+		case KindToolResult:
+			sawToolResult = true
 		}
 	}
-	return false
+	// Only tool results in view (the dispatching assistant scrolled out of the
+	// tail): mid-turn, so open.
+	return sawToolResult
 }
 
 func containsAgentID(s string) bool {
