@@ -178,6 +178,13 @@ func parseLine(line []byte, uses map[string]ToolUse) (Entry, bool) {
 			return e, true
 		}
 		if isStringContent(re.Message) {
+			// Local slash commands (/mcp, /config, /model, ...) write a user entry
+			// whose string content is the command echo or its stdout. It looks like
+			// a typed prompt but the model never runs, so treating it as one opens a
+			// phantom turn that reads as Working forever. Skip it as chrome.
+			if isLocalCommand(re.Message) {
+				return Entry{}, false
+			}
 			e.Kind = KindUserPrompt
 			return e, true
 		}
@@ -358,6 +365,30 @@ func hasToolUseResult(raw json.RawMessage) bool {
 func isStringContent(msg json.RawMessage) bool {
 	c := bytes.TrimSpace(messageContent(msg))
 	return len(c) > 0 && c[0] == '"'
+}
+
+// localCommandPrefixes mark a synthetic user entry Claude Code writes for a
+// local slash command: the command echo (<command-name>/<command-message>/
+// <command-args>) and its captured output (<local-command-stdout>/-stderr>).
+// These carry plain string content like a typed prompt, but no model turn
+// follows — so they must not open or hold open a turn.
+var localCommandPrefixes = []string{
+	"<command-name>", "<command-message>", "<command-args>",
+	"<local-command-stdout>", "<local-command-stderr>",
+}
+
+func isLocalCommand(msg json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(messageContent(msg), &s) != nil {
+		return false
+	}
+	s = strings.TrimSpace(s)
+	for _, p := range localCommandPrefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func isInterrupt(msg json.RawMessage) bool {
