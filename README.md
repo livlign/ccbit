@@ -1,5 +1,7 @@
 # ccbit
 
+[![ci](https://github.com/livlign/ccbit/actions/workflows/ci.yml/badge.svg)](https://github.com/livlign/ccbit/actions/workflows/ci.yml)
+
 A session-awareness status line for [Claude Code](https://claude.com/claude-code), led by a stateful kaomoji face named **Bit**. On every render Bit reads the session transcript, works out what's happening, and narrates it in a line or two — like a small secretary sitting on the bottom row of your terminal.
 
 ![ccbit — a status line that reads your session. One coding turn narrated by Bit: working in cyan, a build failure with a table-flip face, recovery with "Build green again.", a done summary with files edited and tests passed, idle with alerts from other sessions — ending on all 8 states: working, agents running, waiting on you, failed, done, done-recovered, stopped, idle.](docs/hero.gif)
@@ -20,6 +22,8 @@ Requires Claude Code ≥ v2.1.153 (for the `COLUMNS` width hint). No Go toolchai
 ```sh
 curl -fsSL https://raw.githubusercontent.com/livlign/ccbit/main/install.sh | bash
 ```
+
+The installer verifies the downloaded binary's SHA-256 against the release's `checksums.txt` before installing, and refuses to install on a mismatch.
 
 Open a new Claude Code session to see Bit. A settings file may only define **one** `statusLine`; if you already have one, the installer replaces it (your previous `settings.json` is backed up first).
 
@@ -57,13 +61,13 @@ Bit's face maps to the session state (first match wins, in priority order), and 
 | Priority | State | Face | When |
 |---|---|---|---|
 | 1 | Stopped | `(¬°-°)¬` | a quiet open turn with a dispatched tool that never answered (hang or unnoticed permission prompt), or silence past any plausible thinking stretch (~15m) |
-| 2 | Failed | <code>(╯°□°)╯︵&nbsp;┻━┻</code> | the latest build/test errored |
+| 2 | Failed | <code>(╯°□°)╯︵&nbsp;┻━┻</code> | the latest build/test errored — Bit appends the concrete reason when the output gives one up (a compiler location, a named failing test, a known signature) |
 | 3 | Waiting on you | `(◕_◕)?` | a question or plan is awaiting your answer |
 | 4 | Agents running | <code>┏(•&#95;•)┛&nbsp;⇄&nbsp;┗(•&#95;•)┓</code> | subagents are in flight |
-| 5 | Working | <code>-(๏&#95;๏)-&nbsp;⇄&nbsp;৲(๏&#95;๏)৲</code> | a turn is in progress; long silent stretches with nothing pending show as `thinking (2m31s)` rather than decaying into Stopped |
+| 5 | Working | <code>\(•&#95;•)/&nbsp;⇄&nbsp;/(•&#95;•)\</code> … | a turn is in progress; the working face is a hand gesture picked per turn (raise-the-roof, pumping, flexing, …) that animates between two frames. Long silent stretches with nothing pending show as `thinking (2m31s)` rather than decaying into Stopped |
 | 6 | Done (recovered) | `(→_←")` | idle, and a build/test passed this turn after an earlier failure |
 | 7 | Done | `(つ•‿•)つ` | the turn finished having edited, committed/pushed/deployed, or passed a build/test |
-| 8 | Idle | `(•_•)` | nothing else applies (e.g. a turn that only read or answered) |
+| 8 | Idle | `(•_•)` `(°.°)` `(◕_◕)` … | nothing else applies (e.g. a turn that only read or answered). The idle face rotates per turn through a small set of resting moods — picked deterministically from the turn, so it's steady through a turn's repaints and just varies turn to turn |
 
 Bit recaps in plain sentences rather than a row of glyphs:
 
@@ -71,11 +75,11 @@ Bit recaps in plain sentences rather than a row of glyphs:
 (つ•‿•)つ 4 files edited, line changes: +885/-99. Build succeeded. Tests succeeded.
 (→_←")  2 files edited. Build green again.
 -(๏_๏)- editing ccbit (3 files) · 1/4 todos · 2m14s
-(╯°□°)╯︵ ┻━┻ ccbit build failed
+(╯°□°)╯︵ ┻━┻ ccbit build failed · internal/render/render.go:42:3: undefined: foo
 (¬°-°)¬ stopped · last: editing render.go · 2m ago
 ```
 
-Motion exists only in Working and Agents — a 2-frame swap on a ~2s wall-clock cycle, time-derived so concurrent repaints never jitter. The felt liveness during a long turn comes from the **numbers** ticking, not the face.
+Motion exists only in Working and Agents — a 2-frame swap on a ~2s wall-clock cycle, time-derived so concurrent repaints never jitter. The Working and Idle faces are also assembled per turn from shared parts — a pool of eyes and a per-state pool of hands — so which gesture (or resting pose) you see is picked once per turn and held steady through that turn's repaints, varying turn to turn. The felt liveness during a long turn comes from the **numbers** ticking and the gesture animating, not from the face changing under you.
 
 ### Other sessions
 
@@ -90,6 +94,21 @@ When you run several sessions at once, Bit speaks up about the others on line 1 
 - A session that **just finished** a turn is flagged with a nudge (it clears when you switch over and prompt it, and stops nagging after a while).
 - A session that **crashed**, **needs you**, or **stalled** is named with its state.
 - Several merely-busy sessions become a light count; a single idle one isn't mentioned at all.
+
+Line 1 can only afford a fragment. For the full picture, run `ccbit sessions` in any shell — it prints every live session as a table, the actionable ones first:
+
+```
+$ ccbit sessions
+STATE      AGE  PROJECT  SESSION
+failed     2m   api      Fix login bug
+needs you  5s   web      Redesign nav
+working    1s   ccbit    Refactor parser
+idle       30s  docs     —
+```
+
+Same data, no new source — just a full read of the heartbeats line 1 hints at. Add `--json` to pipe it.
+
+To see every face before a real session happens to hit each state, run `ccbit demo` — it prints Bit in all eight states from synthetic data (reads nothing). `ccbit version` and `ccbit help` round out the CLI.
 
 ### Line 2 — the ambient line
 
@@ -116,6 +135,16 @@ Everything stays silent until there's enough history to be trustworthy — a wro
 | `CCBIT_STALL` | learned (≈45–300s) | seconds of inactivity before an open turn reads as Stopped; an explicit value overrides the learned one |
 | `NO_COLOR` | unset | set to disable all ANSI color |
 | `COLUMNS` | — | width hint; below ~60 columns, risky wide glyphs fall back to ASCII-safe faces |
+
+### Custom error signatures (optional)
+
+When a build fails, Bit shows the first concrete reason it can extract from the output. To map a recurring failure to your own message, create `~/.config/ccbit/error-signatures` (or `$XDG_CONFIG_HOME/ccbit/error-signatures`) with one `pattern⇥message` per line — a case-insensitive regular expression, a **tab**, then the message. A matching signature wins over the built-in extraction; `#` lines are comments.
+
+```
+# pattern<TAB>message
+401|codeartifact	renew AWS SSO for codeartifact
+no space left on device	disk full — clear build cache
+```
 
 ## How it works
 

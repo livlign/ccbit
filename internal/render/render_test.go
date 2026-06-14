@@ -12,22 +12,22 @@ import (
 
 func TestFaceRules(t *testing.T) {
 	// Working frames must differ from each other and from idle.
-	a, b := Face(state.Working, 0, false), Face(state.Working, 1, false)
-	idle := Face(state.Idle, 0, false)
+	a, b := Face(state.Working, 0, false, 0), Face(state.Working, 1, false, 0)
+	idle := Face(state.Idle, 0, false, 0)
 	if a == b {
 		t.Fatalf("working frames identical: %q", a)
 	}
 	if a == idle || b == idle {
 		t.Fatalf("working frame equals idle face %q", idle)
 	}
-	if idle != "(•_•)" {
-		t.Fatalf("idle face = %q", idle)
+	if idle != "(•_•)" { // seed 0 -> the neutral default
+		t.Fatalf("idle face (seed 0) = %q", idle)
 	}
 	// Narrow fallbacks.
-	if got := Face(state.Failed, 0, true); got != "(>_<) FAILED" {
+	if got := Face(state.Failed, 0, true, 0); got != "(>_<) FAILED" {
 		t.Fatalf("narrow failed = %q", got)
 	}
-	if got := Face(state.DoneNormal, 0, true); got != "(•‿•)" {
+	if got := Face(state.DoneNormal, 0, true, 0); got != "(•‿•)" {
 		t.Fatalf("narrow done = %q", got)
 	}
 }
@@ -71,8 +71,12 @@ func TestLine1Working(t *testing.T) {
 		HasElapsed: true,
 		Elapsed:    2*time.Minute + 14*time.Second,
 	}
-	got := Render(v, ctx())[0]
-	want := "-(๏_๏)- editing svcA (2 files) · svcB (1 file) · 2m14s"
+	c := ctx()
+	got := Render(v, c)[0]
+	// The working face is assembled per turn from parts; assert the narration
+	// after it rather than a fixed face.
+	face := workingFace(faceSeed(c.In.SessionID, v.Turn), c.FrameFast)
+	want := face + " editing svcA (2 files) · svcB (1 file) · 2m14s"
 	if got != want {
 		t.Fatalf("line1 = %q, want %q", got, want)
 	}
