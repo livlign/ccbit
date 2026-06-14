@@ -276,11 +276,10 @@ The only Claude Code config ccbit needs is the `statusLine` block (§11.2).
 
 The v1 stdout `[VERIFY]` is resolved: the failure text is in the transcript `tool_result` (§6.3). All tiers read the same entry.
 
-- **Tier 1 (build now):** `is_error` → `build ✓` / `build failed`. No text parsing.
-- **Tier 2 (signature dictionary):** on failure, grep the result `content` text against a user-maintained pattern→message map (`~/.config/ccbit/error-signatures` or in-repo). Example: text containing `401`/`codeartifact` → `renew AWS SSO for codeartifact`. Unknown → fall back to tier 1.
-- **Tier 3 (model-assisted, opt-in, default off):** on failure with no tier-2 match, send the result text to a cheap model call, write a one-line diagnosis. Adds an API call + latency per failure; gate behind `CCBIT_TIER3=1`.
-
-Tiers 2–3 are post-v1 but no longer blocked by a verification.
+- **Tier 1 (SHIPPED):** `is_error` → `build ✓` / `build failed`. No text parsing.
+- **Tier 1.5 (SHIPPED — `internal/diag`):** on failure, extract the first concrete reason from the captured result text with no config — a compiler/linter `file:line[:col]: message`, a named `--- FAIL: Test…`, an explicit `error:` line, else the bare `Exit code N`. High-signal only; a miss surfaces nothing (plain "build failed") rather than a guess. The Failed line appends it, ellipsized.
+- **Tier 2 (SHIPPED — `internal/diag`):** a user-maintained `pattern⇥message` map at `~/.config/ccbit/error-signatures` (or `$XDG_CONFIG_HOME/ccbit/...`). A matching case-insensitive regexp's message overrides tier 1.5; unparsable lines are skipped so one typo can't break the file.
+- **Tier 3 (model-assisted) — NOT BUILT, by design.** A per-failure model call adds network, latency, and cost, which cuts against ccbit being a transcript-only, no-daemon tool. Left out deliberately rather than gated behind a flag.
 
 ---
 

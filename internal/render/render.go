@@ -5,11 +5,13 @@ package render
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/livlign/ccbit/internal/diag"
 	"github.com/livlign/ccbit/internal/gitx"
 	"github.com/livlign/ccbit/internal/input"
 	"github.com/livlign/ccbit/internal/sessions"
@@ -23,9 +25,9 @@ const NarrowCols = 60
 
 // Ctx carries per-render environment the line builders need.
 type Ctx struct {
-	In       input.Stdin
-	RepoRoot string // git toplevel, or "" if unknown
-	Cols     int    // terminal width from COLUMNS, 0 if unset
+	In        input.Stdin
+	RepoRoot  string // git toplevel, or "" if unknown
+	Cols      int    // terminal width from COLUMNS, 0 if unset
 	Narrow    bool
 	Frame     int // 0 or 1, wall-clock selected (~2s swap) — Agents shimmy
 	FrameFast int // 0 or 1, wall-clock selected (~1s swap) — Working face
@@ -64,18 +66,86 @@ type Ctx struct {
 	Git gitx.Info
 }
 
+// The Working and Idle faces are assembled per turn from shared parts: a pool
+// of eye cores, and a per-state pool of "hands" (wrappers, %s = the eyes). A
+// turn-derived seed (faceSeed) picks one eye and one hand, so the face is steady
+// through a turn's repaints and varies between turns. Eye index uses the seed's
+// low end, hand index the next radix up, so the two vary independently.
+
+// eyes is the shared eye pool. All glyphs are single-width.
+var eyes = []string{
+	"•_•", "°.°", "-_-", "◔_◔", "ʘ_ʘ", "◕_◕", "^_^", ">_<", "*_*", "o_o",
+}
+
+// idleHands are the resting face's static wrappers; %s is where the eyes slot.
+var idleHands = []string{
+	"(%s)",   // bare
+	"(%s)旦",  // sipping a cup, on a break
+	"d(%s)b", // thumbs up
+}
+
+// workingHand is one animated gesture: the two frame templates the face
+// alternates between (~1s) while a turn runs. The frames are distinct poses, so
+// the motion reads as action rather than a mirror flip.
+type workingHand struct{ a, b string }
+
+var workingHands = []workingHand{
+	{`\(%s)/`, `/(%s)\`}, // raise-the-roof
+	{`>(%s)<`, `<(%s)>`}, // elbows pumping
+	{`ᕙ(%s)ᕗ`, `\(%s)/`}, // march-arm -> arms up
+	{`ᕦ(%s)ᕤ`, `\(%s)/`}, // flex -> arms up
+	{`ง(%s)ง`, `-(%s)-`}, // fists -> arms out
+	{`-(%s)-`, `৲(%s)৲`}, // arm swing (the original Working face)
+	{`-(%s)-`, `\(%s)/`}, // wind-up
+	{`\(%s)-`, `-(%s)/`}, // alternating arms
+	{`/(%s)/`, `\(%s)\`}, // swaying / rowing
+	{`ง(%s)ง`, `ว(%s)ว`}, // fists shaking
+}
+
+// eye picks this turn's shared eye core.
+func eye(seed uint64) string { return eyes[seed%uint64(len(eyes))] }
+
+// handIndex picks a hand for a pool of size n, from a different slice of the
+// seed than eye() uses so the two rotate independently.
+func handIndex(seed uint64, n int) uint64 { return (seed / uint64(len(eyes))) % uint64(n) }
+
+// idleFace assembles the resting face: a per-turn eye in a per-turn static hand.
+// The cup is the one width-risky glyph, so a narrow terminal drops the prop.
+func idleFace(seed uint64, narrow bool) string {
+	hand := idleHands[handIndex(seed, len(idleHands))]
+	if narrow && strings.Contains(hand, "旦") {
+		hand = "(%s)"
+	}
+	return fmt.Sprintf(hand, eye(seed))
+}
+
+// workingFace assembles the working face: a per-turn eye in a per-turn gesture,
+// alternating between the gesture's two frames as frame flips.
+func workingFace(seed uint64, frame int) string {
+	h := workingHands[handIndex(seed, len(workingHands))]
+	tmpl := h.a
+	if frame == 1 {
+		tmpl = h.b
+	}
+	return fmt.Sprintf(tmpl, eye(seed))
+}
+
+// faceSeed derives a stable per-turn seed for face rotation: identical across a
+// turn's ~1×/s repaints (so the face never flickers) yet different from turn to
+// turn and session to session.
+func faceSeed(sessionID string, t transcript.Turn) uint64 {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%s|%s|%d", sessionID, t.PromptID, t.Start.Unix())
+	return h.Sum64()
+}
+
 // Face returns the kaomoji for a state. Working and Agents animate via Frame;
-// every other face is static. Narrow swaps risky glyphs for safe fallbacks.
-func Face(s state.State, frame int, narrow bool) string {
+// Idle rotates per turn via seed; the rest are static. Narrow swaps risky glyphs
+// for safe fallbacks.
+func Face(s state.State, frame int, narrow bool, seed uint64) string {
 	switch s {
 	case state.Working:
-		// Arms flat -> raised + mouth opening: pure-ASCII body language that reads
-		// as active work and renders on every font (the v1 triangles ◣◢ are
-		// Geometric-Shapes glyphs that tofu/mangle on Windows).
-		if frame == 0 {
-			return "-(๏_๏)-"
-		}
-		return "৲(๏_๏)৲"
+		return workingFace(seed, frame)
 	case state.Agents:
 		if narrow {
 			if frame == 0 {
@@ -103,8 +173,10 @@ func Face(s state.State, frame int, narrow bool) string {
 		return "(╯°□°)╯︵ ┻━┻"
 	case state.Stopped:
 		return "(¬°-°)¬"
-	default: // Idle
-		return "(•_•)"
+	case state.Idle:
+		return idleFace(seed, narrow)
+	default: // unknown -> neutral resting face
+		return fmt.Sprintf("(%s)", eyes[0])
 	}
 }
 
@@ -116,7 +188,8 @@ func Render(v state.View, c Ctx) []string {
 	if v.State == state.Working {
 		frame = c.FrameFast // Working swaps every ~1s; Agents stays at ~2s
 	}
-	l1 := Face(v.State, frame, c.Narrow) + " " + line1(v, c)
+	seed := faceSeed(c.In.SessionID, v.Turn)
+	l1 := Face(v.State, frame, c.Narrow, seed) + " " + line1(v, c)
 	if c.ColorOn {
 		l1 = colorize(l1, line1Color(v.State))
 	}
@@ -202,6 +275,12 @@ func line1(v state.View, c Ctx) string {
 		// A repeat offender is the "stop and look" cue: Bit is going in circles.
 		if v.Turn.FailStreak >= 3 {
 			s += fmt.Sprintf(" (%d× in a row)", v.Turn.FailStreak)
+		}
+		// What actually broke, when the failure text gives up a concrete reason
+		// (a compiler location, a named test, a signature) — turning the alarm
+		// into a signpost.
+		if d := diag.Diagnose(lastFailedText(v.Turn.Builds)); d != "" {
+			s += " · " + ellipsize(d, 48)
 		}
 		return s
 
@@ -591,6 +670,17 @@ func countFiles(n int) string {
 		return "1 file"
 	}
 	return fmt.Sprintf("%d files", n)
+}
+
+// lastFailedText is the captured output of the most recent failing build/test —
+// the raw material diag.Diagnose mines for a concise reason.
+func lastFailedText(builds []transcript.BuildResult) string {
+	for i := len(builds) - 1; i >= 0; i-- {
+		if builds[i].IsError {
+			return builds[i].Text
+		}
+	}
+	return ""
 }
 
 func failedKind(builds []transcript.BuildResult) (string, bool) {

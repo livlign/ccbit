@@ -77,8 +77,12 @@ func TestSiblingClauseEmpty(t *testing.T) {
 func TestLine1ShowsSiblings(t *testing.T) {
 	c := ctx()
 	c.Siblings = []sessions.Beat{{State: "failed", Project: "api"}}
-	l1 := Render(state.View{State: state.Idle}, c)[0]
-	want := "(•_•) idle · The session api crashed"
+	v := state.View{State: state.Idle}
+	l1 := Render(v, c)[0]
+	// The idle face rotates per turn, so assert on the face this turn's seed
+	// selects plus the sibling clause that should ride line 1 after it.
+	face := idleFace(faceSeed(c.In.SessionID, v.Turn), c.Narrow)
+	want := face + " idle · The session api crashed"
 	if l1 != want {
 		t.Fatalf("line1 with sibling = %q, want %q", l1, want)
 	}

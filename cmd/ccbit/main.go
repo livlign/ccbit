@@ -8,8 +8,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +33,90 @@ import (
 var version = "dev"
 
 func main() {
+	// Claude Code invokes ccbit with no arguments to paint the status line. Any
+	// argument means a human ran it directly — dispatch to a subcommand.
+	if len(os.Args) > 1 {
+		os.Exit(runCLI(os.Args[1:]))
+	}
+	statusLine()
+}
+
+// runCLI handles the explicit subcommands. Returns a process exit code.
+func runCLI(args []string) int {
+	switch args[0] {
+	case "sessions":
+		return cmdSessions(args[1:])
+	case "demo":
+		for _, line := range render.Demo(os.Getenv("NO_COLOR") == "") {
+			fmt.Println(line)
+		}
+		return 0
+	case "version", "-v", "--version":
+		fmt.Println("ccbit " + version)
+		return 0
+	case "help", "-h", "--help":
+		printUsage(os.Stdout)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "ccbit: unknown command %q\n\n", args[0])
+		printUsage(os.Stderr)
+		return 2
+	}
+}
+
+// cmdSessions prints the roster of live sessions across all terminals — a full
+// read of the heartbeat dir the status line otherwise only hints at on line 1.
+func cmdSessions(args []string) int {
+	jsonOut := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOut = true
+		default:
+			fmt.Fprintf(os.Stderr, "ccbit sessions: unknown flag %q\n", a)
+			return 2
+		}
+	}
+	now := time.Now()
+	beats := sessions.Active("", now) // selfID "" excludes nothing: list them all
+	if jsonOut {
+		if beats == nil {
+			beats = []sessions.Beat{}
+		}
+		b, err := json.MarshalIndent(beats, "", "  ")
+		if err != nil {
+			return 1
+		}
+		fmt.Println(string(b))
+		return 0
+	}
+	for _, line := range render.Roster(beats, now, os.Getenv("NO_COLOR") == "") {
+		fmt.Println(line)
+	}
+	return 0
+}
+
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, `ccbit — a session-awareness status line for Claude Code.
+
+Usage:
+  ccbit              Render the status line (reads Claude Code's stdin JSON).
+  ccbit sessions     List every live Claude Code session across your terminals.
+  ccbit demo         Preview Bit in every state (synthetic; reads nothing).
+  ccbit version      Print the version.
+  ccbit help         Show this help.
+
+Flags:
+  ccbit sessions --json    Machine-readable roster, for scripting.
+
+ccbit is normally invoked by Claude Code as the statusLine command; the
+subcommands above are for running it yourself.
+`)
+}
+
+// statusLine is the default invocation: read Claude Code's stdin JSON, derive
+// this session's state, and print the two ambient lines.
+func statusLine() {
 	now := time.Now()
 	in := input.Parse(os.Stdin)
 
@@ -106,12 +192,12 @@ func main() {
 		RepoRoot: root,
 		// RepoRoot is resolved with a disposable cache so a 1s refresh interval
 		// does not spawn git every render.
-		Cols:        cols,
-		Narrow:      cols > 0 && cols < render.NarrowCols,
-		Frame:       int((now.Unix() / 2) % 2),
-		FrameFast:   int(now.Unix() % 2),
-		ColorOn:     os.Getenv("NO_COLOR") == "",
-		Now:         now,
+		Cols:             cols,
+		Narrow:           cols > 0 && cols < render.NarrowCols,
+		Frame:            int((now.Unix() / 2) % 2),
+		FrameFast:        int(now.Unix() % 2),
+		ColorOn:          os.Getenv("NO_COLOR") == "",
+		Now:              now,
 		Trend:            trend,
 		Siblings:         sessions.Active(in.SessionID, now),
 		TypicalTurn:      stats.TypicalTurn(),

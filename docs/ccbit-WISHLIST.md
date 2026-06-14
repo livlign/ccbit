@@ -1,7 +1,14 @@
-## `ccbit sessions` subcommand
+## `ccbit sessions` subcommand — SHIPPED
 
 Standalone command that prints the full roster of live sessions, not just the
 width-squeezed inline hint on line 1.
+
+**As built:** `ccbit sessions` reads the heartbeat dir and prints an aligned
+table (STATE / AGE / PROJECT / SESSION), actionable states first — reusing the
+status line's own ordering, state vocabulary, and per-state colors. The open
+questions resolved as: human table by default with `--json` for piping;
+live-only (same 3-min `activeWindow` the line uses), no dimmed-expired rows;
+invoked manually. Adding the dispatcher also wired `ccbit version` / `help`.
 
 **Why:** cross-session awareness is ccbit's differentiator vs. other statuslines.
 Line 1 can only afford a terse fragment ("3 other sessions running"); the heartbeat
