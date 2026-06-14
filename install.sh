@@ -25,6 +25,48 @@ esac
 
 ASSET="ccbit_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$REPO/releases/latest/download/$ASSET"
+CHECKSUMS_URL="https://github.com/$REPO/releases/latest/download/checksums.txt"
+
+# sha256_of prints the SHA-256 of a file, using whichever tool is present.
+# Returns non-zero when neither is available (caller skips verification).
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+# verify_checksum checks the downloaded asset against the release's
+# checksums.txt. A mismatch is fatal (return 1). When verification genuinely
+# can't run — checksums.txt unreachable, asset unlisted, or no sha256 tool — it
+# warns and returns 0 so a release predating checksums still installs.
+verify_checksum() {
+  local asset_path="$1" sums want got
+  sums="$(dirname "$asset_path")/checksums.txt"
+  if ! curl -fsSL "$CHECKSUMS_URL" -o "$sums" 2>/dev/null; then
+    echo "ccbit: WARNING — could not fetch checksums.txt; skipping integrity check" >&2
+    return 0
+  fi
+  want=$(awk -v f="$ASSET" '$2 == f {print $1}' "$sums")
+  if [ -z "$want" ]; then
+    echo "ccbit: WARNING — no checksum listed for $ASSET; skipping integrity check" >&2
+    return 0
+  fi
+  if ! got=$(sha256_of "$asset_path"); then
+    echo "ccbit: WARNING — no sha256 tool (sha256sum/shasum); skipping integrity check" >&2
+    return 0
+  fi
+  if [ "$got" != "$want" ]; then
+    echo "ccbit: ERROR — checksum mismatch for $ASSET (refusing to install)" >&2
+    echo "  expected $want" >&2
+    echo "  got      $got" >&2
+    return 1
+  fi
+  echo "ccbit: checksum verified"
+}
 
 fetch_release() {
   [ -n "$OS" ] && [ -n "$ARCH" ] || return 1
@@ -35,6 +77,7 @@ fetch_release() {
   trap "rm -rf '$tmp'" RETURN 2>/dev/null || true
   echo "ccbit: downloading $ASSET from the latest release"
   curl -fsSL "$URL" -o "$tmp/$ASSET" || { rm -rf "$tmp"; return 1; }
+  verify_checksum "$tmp/$ASSET" || { rm -rf "$tmp"; return 1; }
   tar -xzf "$tmp/$ASSET" -C "$tmp" ccbit || { rm -rf "$tmp"; return 1; }
   mkdir -p "$DEST_DIR"
   install -m 0755 "$tmp/ccbit" "$DEST"
