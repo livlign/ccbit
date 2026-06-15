@@ -21,8 +21,14 @@ func Roster(beats []sessions.Beat, now time.Time, colorOn bool) []string {
 	header := row{"STATE", "AGE", "PROJECT", "SESSION"}
 	rows := make([]row, len(beats))
 	for i, b := range beats {
+		status := rosterStatus(b.State)
+		if sessions.Stale(b, now) {
+			// The heartbeat has stopped advancing — the session's terminal almost
+			// certainly closed. Don't let a frozen "idle" pose as a live one; say so.
+			status = "stale"
+		}
 		rows[i] = row{
-			status:  rosterStatus(b.State),
+			status:  status,
 			age:     fmtAge(now.Sub(time.Unix(b.UpdatedAt, 0))),
 			project: dash(b.Project),
 			session: dash(b.Title),
@@ -42,7 +48,11 @@ func Roster(beats []sessions.Beat, now time.Time, colorOn bool) []string {
 	for i, r := range rows {
 		col := ""
 		if colorOn {
-			col = line1Color(stateFromString(beats[i].State))
+			if r.status == "stale" {
+				col = dim
+			} else {
+				col = line1Color(stateFromString(beats[i].State))
+			}
 		}
 		out = append(out, rosterLine(r, w, col))
 	}

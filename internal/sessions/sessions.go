@@ -179,6 +179,15 @@ func completionStamp(prev Beat, newState string, now time.Time) int64 {
 	}
 }
 
+// Stale reports whether a heartbeat has gone quiet long enough that the session
+// is almost certainly gone (terminal closed, process killed) rather than merely
+// resting. A live session rewrites its beat ~1×/s, so one past liveWindow has
+// stopped beating. It still counts as Active until activeWindow; callers that
+// want to flag the difference (the roster) use this.
+func Stale(b Beat, now time.Time) bool {
+	return now.Sub(time.Unix(b.UpdatedAt, 0)) > liveWindow
+}
+
 // JustCompleted reports whether this session finished a turn recently enough to
 // still be worth a "come take a look" nudge — and is still alive to look at.
 func JustCompleted(b Beat, now time.Time) bool {

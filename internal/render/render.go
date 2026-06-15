@@ -863,6 +863,7 @@ const (
 	yellow    = "\x1b[33m"
 	red       = "\x1b[31m"
 	brightRed = "\x1b[91m" // more legible than dim red on dark terminals
+	dim       = "\x1b[2m"  // faint: a stale (likely-gone) session in the roster
 )
 
 func colorize(s, code string) string { return code + s + reset }

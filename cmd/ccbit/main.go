@@ -64,19 +64,53 @@ func runCLI(args []string) int {
 	}
 }
 
+// watchInterval is how often `ccbit sessions --watch` repaints the roster.
+const watchInterval = 2 * time.Second
+
 // cmdSessions prints the roster of live sessions across all terminals — a full
 // read of the heartbeat dir the status line otherwise only hints at on line 1.
+// With --watch it repaints the roster on an interval until interrupted.
 func cmdSessions(args []string) int {
 	jsonOut := false
+	watch := false
 	for _, a := range args {
 		switch a {
 		case "--json":
 			jsonOut = true
+		case "--watch":
+			watch = true
 		default:
 			fmt.Fprintf(os.Stderr, "ccbit sessions: unknown flag %q\n", a)
 			return 2
 		}
 	}
+	if watch && jsonOut {
+		fmt.Fprintln(os.Stderr, "ccbit sessions: --watch and --json are mutually exclusive")
+		return 2
+	}
+
+	if !watch {
+		return renderSessions(jsonOut, os.Stdout)
+	}
+
+	// Watch mode: clear the screen and repaint the roster every tick until the
+	// user interrupts (Ctrl-C). The heartbeat dir is the source of truth, so each
+	// pass is a fresh read — no state carried between paints.
+	const clearScreen = "\033[H\033[2J"
+	ticker := time.NewTicker(watchInterval)
+	defer ticker.Stop()
+	for {
+		fmt.Print(clearScreen)
+		if code := renderSessions(false, os.Stdout); code != 0 {
+			return code
+		}
+		<-ticker.C
+	}
+}
+
+// renderSessions does one read-and-print pass of the live roster. Returns a
+// process exit code.
+func renderSessions(jsonOut bool, w io.Writer) int {
 	now := time.Now()
 	beats := sessions.Active("", now) // selfID "" excludes nothing: list them all
 	if jsonOut {
@@ -87,11 +121,11 @@ func cmdSessions(args []string) int {
 		if err != nil {
 			return 1
 		}
-		fmt.Println(string(b))
+		fmt.Fprintln(w, string(b))
 		return 0
 	}
 	for _, line := range render.Roster(beats, now, os.Getenv("NO_COLOR") == "") {
-		fmt.Println(line)
+		fmt.Fprintln(w, line)
 	}
 	return 0
 }
@@ -107,7 +141,8 @@ Usage:
   ccbit help         Show this help.
 
 Flags:
-  ccbit sessions --json    Machine-readable roster, for scripting.
+  ccbit sessions --json     Machine-readable roster, for scripting.
+  ccbit sessions --watch    Repaint the roster every 2s until interrupted.
 
 ccbit is normally invoked by Claude Code as the statusLine command; the
 subcommands above are for running it yourself.
