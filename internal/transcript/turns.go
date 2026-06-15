@@ -379,29 +379,37 @@ func firstLine(s string) string {
 }
 
 // lastTurnOpen decides whether the most recent turn is still in progress by
-// scanning back to the nearest decisive entry: an assistant end_turn closes the
-// turn, a pending tool_use or a fresh user prompt keeps it open, an interrupt
-// closes it. A tool result is NOT decisive on its own — when a tool is
-// interrupted mid-run its result still flushes in after the interrupt marker, so
-// stopping at that trailing result would re-open an interrupted turn. Skip past
-// tool results to the signal that says whether the model has unfinished work.
+// scanning back for the nearest decisive entry: an assistant end_turn closes the
+// turn, a fresh user prompt keeps it open, an interrupt closes it.
+//
+// The subtlety is the straggler problem. Interrupting an in-flight request
+// writes the marker, then the killed request keeps flushing entries in for a
+// second or two afterward — late assistant messages (stop_reason "tool_use")
+// AND their tool results — all before any new user prompt. Neither is decisive
+// on its own: stopping at one would re-open a turn the user already interrupted,
+// so Bit would read "working" forever after an Esc. So an assistant message or
+// tool result only counts as live work when NO interrupt precedes it back to the
+// nearest user prompt; an interrupt seen first wins and closes the turn.
 func lastTurnOpen(entries []Entry) bool {
-	sawToolResult := false
+	sawWork := false // a late assistant/tool result, pending an interrupt check
 	for i := len(entries) - 1; i >= 0; i-- {
 		switch entries[i].Kind {
 		case KindAssistant:
-			return entries[i].StopReason != "end_turn"
+			if entries[i].StopReason == "end_turn" {
+				return false
+			}
+			sawWork = true
+		case KindToolResult:
+			sawWork = true
 		case KindUserPrompt:
 			return true
 		case KindInterrupt:
 			return false
-		case KindToolResult:
-			sawToolResult = true
 		}
 	}
-	// Only tool results in view (the dispatching assistant scrolled out of the
-	// tail): mid-turn, so open.
-	return sawToolResult
+	// No prompt/interrupt in view (the dispatching turn boundary scrolled out of
+	// the tail): open iff there was unfinished work.
+	return sawWork
 }
 
 func containsAgentID(s string) bool {

@@ -35,6 +35,24 @@ func TestInterruptThenStragglerResultStaysClosed(t *testing.T) {
 	}
 }
 
+func TestInterruptThenStragglerAssistantStaysClosed(t *testing.T) {
+	// Interrupting an in-flight request: the marker lands, then late assistant
+	// messages from the killed request still flush in (stop_reason "tool_use"),
+	// followed by their tool results — all with no new user prompt. None of these
+	// stragglers may re-open the turn; Bit must not read "working" after an Esc.
+	prompt := `{"type":"user","timestamp":"` + taskTS + `","promptId":"p1","message":{"role":"user","content":"go"}}`
+	use := `{"type":"assistant","timestamp":"` + taskTS + `","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"sleep 60"}}]}}`
+	marker := `{"type":"user","timestamp":"` + taskTS + `","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}`
+	lateThink := `{"type":"assistant","timestamp":"` + taskTS + `","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"more"}]}}`
+	lateUse := `{"type":"assistant","timestamp":"` + taskTS + `","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"echo hi"}}]}}`
+	lateResult := `{"type":"user","timestamp":"` + taskTS + `","toolUseResult":{"x":1},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b2","is_error":false,"content":"hi"}]}}`
+
+	turns := BuildTurns(parseFixture(prompt, use, marker, lateThink, lateUse, lateResult))
+	if len(turns) != 1 || turns[0].Open {
+		t.Fatalf("turns = %+v, want one closed turn after interrupt + straggler assistant", turns)
+	}
+}
+
 func TestInterruptEscVariant(t *testing.T) {
 	prompt := `{"type":"user","timestamp":"` + taskTS + `","promptId":"p1","message":{"role":"user","content":"hi"}}`
 	marker := `{"type":"user","timestamp":"` + taskTS + `","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
