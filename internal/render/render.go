@@ -209,8 +209,8 @@ func Render(v state.View, c Ctx) []string {
 }
 
 // line1Color maps a state to its whole-line color. Alert states stand out (red
-// for failed, bright red for stopped, yellow for needs-you); active and resting
-// states are white; done is green.
+// for failed, bright red for stopped, yellow for needs-you); active is cyan,
+// resting uses the theme default foreground; done is green.
 func line1Color(s state.State) string {
 	switch s {
 	case state.Failed:
@@ -224,7 +224,7 @@ func line1Color(s state.State) string {
 	case state.Working, state.Agents:
 		return cyan
 	default: // Idle
-		return white
+		return defaultFg
 	}
 }
 
@@ -857,7 +857,7 @@ func fmtCountdown(d time.Duration) string {
 
 const (
 	reset     = "\x1b[0m"
-	white     = "\x1b[37m"
+	defaultFg = "\x1b[39m" // theme's default foreground: legible on light and dark
 	cyan      = "\x1b[36m"
 	green     = "\x1b[32m"
 	yellow    = "\x1b[33m"

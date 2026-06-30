@@ -40,7 +40,7 @@ func TestLine1Color(t *testing.T) {
 		state.DoneNormal: green,
 		state.Working:    cyan,
 		state.Agents:     cyan,
-		state.Idle:       white,
+		state.Idle:       defaultFg,
 	}
 	for s, code := range cases {
 		if got := line1Color(s); got != code {
