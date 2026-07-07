@@ -10,7 +10,7 @@ ccbit answers, at a glance: *is anything working, done, waiting, broken, or stop
 
 ```
 (つ•‿•)つ 4 files edited, line changes: +885/-99. Build succeeded. Tests succeeded.
-~/ccbit · Opus · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
+~/ccbit · main +1 ~2 -1 ↑1 · Opus 4.8 (high) · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
 ```
 
 It is a single Go binary. **No hooks, no daemons.** The transcript is the source of truth; Claude Code already writes it and owns its lifecycle. ccbit only reads it (plus two small, disposable state dirs of its own — see [How it works](#how-it-works)).
@@ -113,10 +113,10 @@ To see every face before a real session happens to hit each state, run `ccbit de
 ### Line 2 — the ambient line
 
 ```
-~/ccbit · Opus · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
+~/ccbit · main +1 ~2 -1 ↑1 · Opus 4.8 (high) · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
 ```
 
-Current directory, model, context-window usage, and rate-limit windows with their reset countdowns. `ctx%` colors only when it warrants attention (≥70 yellow, ≥90 red) and carries a velocity arrow — `↑` while context is climbing, `↓` after a `/compact`.
+Current directory, git branch, model (with its reasoning effort), context-window usage, and rate-limit windows with their reset countdowns. The git segment breaks the worktree down as `+new ~modified -deleted` (each shown only when nonzero), followed by `↑ahead ↓behind`. `ctx%` colors only when it warrants attention (≥70 yellow, ≥90 red) and carries a velocity arrow — `↑` while context is climbing, `↓` after a `/compact`. Several segments have optional color/icon upgrades — see [Configuration](#configuration).
 
 ## Bit gets smarter over time
 
@@ -135,6 +135,18 @@ Everything stays silent until there's enough history to be trustworthy — a wro
 | `CCBIT_STALL` | learned (≈45–300s) | seconds of inactivity before an open turn reads as Stopped; an explicit value overrides the learned one |
 | `NO_COLOR` | unset | set to disable all ANSI color |
 | `COLUMNS` | — | width hint; below ~60 columns, risky wide glyphs fall back to ASCII-safe faces |
+
+### Visual features (optional, opt-in)
+
+Off by default and set independently — none can be safely auto-detected (Nerd Font glyphs show as tofu without a patched font; color and gauges are a matter of taste). Set any to `1` to enable. While idle, ccbit quietly rotates a one-line hint for whichever are still off, so you can discover them without reading this table.
+
+| Var | Effect |
+|---|---|
+| `CCBIT_NERD_FONT` | Nerd Font glyphs for git change marks — plus / pencil / trash instead of `+ ~ -` (requires a patched Nerd Font) |
+| `CCBIT_ICONS` | a leading Nerd Font icon on each ambient segment — folder, branch, chip, gauge, clock (requires a patched Nerd Font) |
+| `CCBIT_GIT_COLOR` | color the git change marks: green new, yellow modified, red deleted |
+| `CCBIT_CTX_GAUGE` | a small fill bar beside the context percentage (`ctx ▆▆▁▁▁ 38%`) |
+| `CCBIT_RATE_COLOR` | escalate the 5h / 7d rate-limit meters to yellow (≥70%) then red (≥90%), like `ctx%` |
 
 ### Custom error signatures (optional)
 

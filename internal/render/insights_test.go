@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/livlign/ccbit/internal/gitx"
+	"github.com/livlign/ccbit/internal/input"
 	"github.com/livlign/ccbit/internal/sessions"
 	"github.com/livlign/ccbit/internal/state"
 	"github.com/livlign/ccbit/internal/transcript"
@@ -119,17 +120,41 @@ func TestWaitingAge(t *testing.T) {
 	}
 }
 
+// clearFeatureEnv turns every opt-in visual feature off for a test, so its
+// assertions don't depend on ambient CCBIT_* set in the developer's shell.
+func clearFeatureEnv(t *testing.T) {
+	for _, k := range []string{"CCBIT_NERD_FONT", "CCBIT_ICONS", "CCBIT_GIT_COLOR", "CCBIT_CTX_GAUGE", "CCBIT_RATE_COLOR"} {
+		t.Setenv(k, "")
+	}
+}
+
 func TestGitSegment(t *testing.T) {
+	clearFeatureEnv(t)
 	c := ctx()
-	c.Git = gitx.Info{Branch: "main", Dirty: 3, Ahead: 2}
+	c.Git = gitx.Info{Branch: "main", New: 1, Modified: 3, Deleted: 2, Ahead: 2}
 	l2 := Render(state.View{State: state.Idle}, c)[1]
-	if !strings.Contains(l2, "main* ↑2") {
-		t.Fatalf("line2 = %q, want git segment main* ↑2", l2)
+	if !strings.Contains(l2, "main +1 ~3 -2 ↑2") {
+		t.Fatalf("line2 = %q, want git segment main +1 ~3 -2 ↑2", l2)
 	}
 	c.Git = gitx.Info{Branch: "main"}
 	l2 = Render(state.View{State: state.Idle}, c)[1]
-	if !strings.Contains(l2, "main") || strings.Contains(l2, "main*") {
+	if !strings.Contains(l2, "main") || strings.ContainsAny(l2, "+~") {
 		t.Fatalf("clean repo line2 = %q, want bare branch", l2)
+	}
+}
+
+func TestGitSegmentNerdFont(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_NERD_FONT", "1")
+	c := ctx()
+	c.Git = gitx.Info{Branch: "main", New: 1, Modified: 3, Deleted: 2, Ahead: 2}
+	l2 := Render(state.View{State: state.Idle}, c)[1]
+	// plus , pencil , trash  — each icon spaced from its count.
+	if want := "main  1  3  2 ↑2"; !strings.Contains(l2, want) {
+		t.Fatalf("line2 = %q, want git segment %q", l2, want)
+	}
+	if strings.ContainsAny(l2, "+~") {
+		t.Fatalf("nerd-font line2 = %q, should not carry ASCII marks", l2)
 	}
 }
 
@@ -199,5 +224,72 @@ func TestSameRepoCollision(t *testing.T) {
 	c.Siblings = []sessions.Beat{{SessionID: "x", State: "working", Project: "other"}}
 	if got = Render(state.View{State: state.Working}, c)[0]; strings.Contains(got, "also working") {
 		t.Fatalf("line1 = %q, no collision expected", got)
+	}
+}
+
+func TestGitSegmentColor(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_GIT_COLOR", "1")
+	c := ctx()
+	c.ColorOn = true
+	c.Git = gitx.Info{Branch: "main", New: 1, Modified: 3, Deleted: 2}
+	l2 := Render(state.View{State: state.Idle}, c)[1]
+	// New green, modified yellow, deleted red — each mark wrapped in its color.
+	if !strings.Contains(l2, colorize(" +1", green)) ||
+		!strings.Contains(l2, colorize(" ~3", yellow)) ||
+		!strings.Contains(l2, colorize(" -2", red)) {
+		t.Fatalf("colored git line2 = %q, want green/yellow/red marks", l2)
+	}
+}
+
+func TestCtxGauge(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_CTX_GAUGE", "1")
+	c := ctx()
+	pct := 38.0
+	c.In.CtxPct = &pct
+	if got := ctxSegment(c); !strings.Contains(got, "▆▆▁▁▁") || !strings.Contains(got, "38%") {
+		t.Fatalf("ctx gauge = %q, want a 2/5 bar and 38%%", got)
+	}
+}
+
+func TestRateSegmentColor(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_RATE_COLOR", "1")
+	hot := 94.0
+	rl := &input.RateLimit{UsedPercentage: &hot}
+	if got := rateSegment("7d", rl, time.Time{}, true); !strings.Contains(got, red) {
+		t.Fatalf("hot rate segment = %q, want red", got)
+	}
+	warm := 78.0
+	rl.UsedPercentage = &warm
+	if got := rateSegment("5h", rl, time.Time{}, true); !strings.Contains(got, yellow) {
+		t.Fatalf("warm rate segment = %q, want yellow", got)
+	}
+	cool := 12.0
+	rl.UsedPercentage = &cool
+	if got := rateSegment("5h", rl, time.Time{}, true); strings.Contains(got, "\x1b[") {
+		t.Fatalf("healthy rate segment = %q, want no color", got)
+	}
+}
+
+func TestIdleTipRotates(t *testing.T) {
+	clearFeatureEnv(t) // all features off → all tips eligible
+	c := ctx()
+	// A showing slot (slot%tipShowEvery==0): first tip is the Nerd Font hint.
+	c.Now = time.Unix(0, 0)
+	if l1 := Render(state.View{State: state.Idle}, c)[0]; !strings.Contains(l1, "tip: set CCBIT_NERD_FONT=1") {
+		t.Fatalf("idle line = %q, want Nerd Font tip", l1)
+	}
+	// A resting slot shows no tip.
+	c.Now = time.Unix(tipPeriodSecs, 0) // slot 1, 1%3 != 0
+	if l1 := Render(state.View{State: state.Idle}, c)[0]; strings.Contains(l1, "tip:") {
+		t.Fatalf("resting-slot idle line = %q, want no tip", l1)
+	}
+	// A sibling to talk about preempts the tip entirely.
+	c.Now = time.Unix(0, 0)
+	c.Siblings = []sessions.Beat{{State: "failed", Project: "api"}}
+	if l1 := Render(state.View{State: state.Idle}, c)[0]; strings.Contains(l1, "tip:") {
+		t.Fatalf("idle-with-sibling line = %q, want no tip", l1)
 	}
 }
