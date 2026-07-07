@@ -4,3 +4,8 @@
 /bin/
 /testdata/
 /dist/
+*.exe
+*.exe~
+
+# Local Claude Code project config
+/.claude/
