@@ -6,7 +6,7 @@ A session-awareness status line for [Claude Code](https://claude.com/claude-code
 
 ![ccbit — a status line that reads your session. One coding turn narrated by Bit: working in cyan, a build failure with a table-flip face, recovery with "Build green again.", a done summary with files edited and tests passed, idle with alerts from other sessions — ending on all 8 states: working, agents running, waiting on you, failed, done, done-recovered, stopped, idle.](docs/hero.gif)
 
-ccbit answers, at a glance: *is anything working, done, waiting, broken, or stopped here — what just changed, what's happening in my other sessions, and is this turn behaving normally?*
+ccbit answers, at a glance: *is anything working, done, waiting, broken, or stopped here — what just changed, and what's happening in my other sessions?*
 
 ```
 (つ•‿•)つ 4 files edited, line changes: +885/-99. Build succeeded. Tests succeeded.
@@ -137,7 +137,7 @@ Everything stays silent until there's enough history to be trustworthy — a wro
 
 ### Visual features (optional, opt-in)
 
-Off by default and set independently — none can be safely auto-detected (Nerd Font glyphs show as tofu without a patched font; color and gauges are a matter of taste). Set any to `1` to enable. While idle, ccbit quietly rotates a one-line hint for whichever are still off, so you can discover them without reading this table.
+Off by default and set independently — none can be safely auto-detected (Nerd Font glyphs show as tofu without a patched font; color and gauges are a matter of taste). Set any to `1` to enable.
 
 | Var | Effect |
 |---|---|
@@ -146,6 +146,12 @@ Off by default and set independently — none can be safely auto-detected (Nerd 
 | `CCBIT_GIT_COLOR` | color the git change marks: green new, yellow modified, red deleted |
 | `CCBIT_CTX_GAUGE` | a small fill bar beside the context percentage (`ctx ▆▆▁▁▁ 38%`) |
 | `CCBIT_RATE_COLOR` | escalate the 5h / 7d rate-limit meters to yellow (≥70%) then red (≥90%), like `ctx%` |
+
+You don't have to memorize these: while idle and with nothing else to say, Bit quietly rotates a one-line hint for whichever features are still off, then goes quiet again — so they surface on their own.
+
+```
+(•_•)旦 idle · tip: set CCBIT_GIT_COLOR=1 to color git changes
+```
 
 ### Custom error signatures (optional)
 
