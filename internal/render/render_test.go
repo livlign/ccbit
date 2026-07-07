@@ -127,6 +127,7 @@ func TestLine1Failed(t *testing.T) {
 }
 
 func TestLine2Ambient(t *testing.T) {
+	clearFeatureEnv(t)
 	c := ctx()
 	pct := 38.0
 	c.In.CtxPct = &pct

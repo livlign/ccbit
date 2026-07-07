@@ -123,7 +123,6 @@ Current directory, git branch, model (with its reasoning effort), context-window
 ccbit keeps a small, **numbers-only** memory per project (no prompt text is ever stored). It folds each completed turn into a couple of moving averages and uses them to move past one-size-fits-all rules:
 
 - **Learned stall threshold.** "Stopped" is no longer a fixed timer — it adapts to how long *this* project's turns normally pause. A repo with slow builds stops falsely reading as stalled; a snappy one flags a hang sooner. (Still overridable with `CCBIT_STALL`.)
-- **"longer than usual."** While working, Bit adds a quiet note when a turn runs well past the project's norm.
 - **Subtle personality.** A red→green recovery reads `Build green again.` rather than a flat status.
 
 Everything stays silent until there's enough history to be trustworthy — a wrong insight costs more than a missing one. Memory is disposable: delete `~/.claude/ccbit/memory/` and ccbit falls back to its fixed defaults.
