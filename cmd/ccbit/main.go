@@ -253,7 +253,6 @@ func statusLine() {
 		Now:              now,
 		Trend:            trend,
 		Siblings:         sessions.Active(in.SessionID, now),
-		TypicalTurn:      stats.TypicalTurn(),
 		TurnLinesAdded:   turnAdded,
 		TurnLinesRemoved: turnRemoved,
 		Tasks:            tasks,

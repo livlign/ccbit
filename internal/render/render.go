@@ -37,10 +37,6 @@ type Ctx struct {
 	Trend    sessions.Trend  // context-window velocity for the ctx% segment
 	Siblings []sessions.Beat // other live sessions, actionable-first
 
-	// TypicalTurn is the project's learned mean turn duration (0 if not yet
-	// learned), used to flag a turn running unusually long.
-	TypicalTurn time.Duration
-
 	// TurnLinesAdded/Removed are this turn's lines-changed delta. The stdin cost
 	// counters are session-cumulative, so main re-bases them at each turn start
 	// (via the heartbeat) — keeping the recap's line numbers in the same scope as
@@ -308,7 +304,7 @@ func line1(v state.View, c Ctx) string {
 		if v.Thinking && v.HasLastAge {
 			base += " · thinking (" + fmtDur(v.LastAge) + ")"
 		}
-		return base + elapsedSuffix(v) + longerThanUsual(v, c) + loopNote(v.Turn)
+		return base + elapsedSuffix(v) + loopNote(v.Turn)
 
 	case state.Agents:
 		s := pluralCount(v.AgentsRunning, "agent") + " running"
@@ -605,19 +601,6 @@ func doneSentence(v state.View, c Ctx) string {
 		return "done"
 	}
 	return strings.Join(sentences, ". ") + "."
-}
-
-// longerThanUsual is Bit's subtle note that this turn has run well past the
-// project's learned norm. Silent until enough history exists and the turn is
-// clearly over the line (2x typical), so it never cries wolf on normal variance.
-func longerThanUsual(v state.View, c Ctx) string {
-	if c.TypicalTurn <= 0 || !v.HasElapsed {
-		return ""
-	}
-	if v.Elapsed > 2*c.TypicalTurn {
-		return " (longer than usual)"
-	}
-	return ""
 }
 
 // linesDelta is this turn's diff size as bare "+added/-removed" (per-turn, not

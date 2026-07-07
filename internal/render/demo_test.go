@@ -6,6 +6,7 @@ import (
 )
 
 func TestDemoCoversEveryState(t *testing.T) {
+	clearFeatureEnv(t)
 	out := strings.Join(Demo(false), "\n")
 	for _, label := range []string{"working", "agents", "waiting", "failed", "done", "redeemed", "stopped", "idle"} {
 		if !strings.Contains(out, label) {

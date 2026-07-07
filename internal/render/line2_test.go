@@ -200,27 +200,6 @@ func TestSiblingClauseStalledAgesOut(t *testing.T) {
 	}
 }
 
-func TestLongerThanUsual(t *testing.T) {
-	c := ctx()
-	c.TypicalTurn = time.Minute
-	// A turn well past 2x the norm gets the subtle note.
-	long := Render(state.View{State: state.Working, HasElapsed: true, Elapsed: 3 * time.Minute}, c)[0]
-	if !strings.Contains(long, "(longer than usual)") {
-		t.Fatalf("long turn line1 = %q, want the note", long)
-	}
-	// A normal-length turn stays quiet.
-	short := Render(state.View{State: state.Working, HasElapsed: true, Elapsed: 30 * time.Second}, c)[0]
-	if strings.Contains(short, "longer than usual") {
-		t.Fatalf("normal turn line1 = %q, should be quiet", short)
-	}
-	// No learned baseline yet -> never fires.
-	c.TypicalTurn = 0
-	cold := Render(state.View{State: state.Working, HasElapsed: true, Elapsed: 9 * time.Minute}, c)[0]
-	if strings.Contains(cold, "longer than usual") {
-		t.Fatalf("without a baseline line1 = %q, should be quiet", cold)
-	}
-}
-
 func TestRecoveryGreenAgain(t *testing.T) {
 	c := ctx()
 	v := state.View{
@@ -254,6 +233,7 @@ func TestTrendArrow(t *testing.T) {
 }
 
 func TestCtxSegmentTrend(t *testing.T) {
+	clearFeatureEnv(t)
 	c := ctx()
 	pct := 38.0
 	c.In.CtxPct = &pct
