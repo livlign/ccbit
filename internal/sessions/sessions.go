@@ -85,13 +85,19 @@ type sample struct {
 // Beat is one session's heartbeat: enough for a sibling to render a digest, plus
 // the ctx sample history this session uses for its own velocity readout.
 type Beat struct {
-	SessionID string   `json:"session_id"`
-	State     string   `json:"state"`   // state.State.String()
-	Project   string   `json:"project"` // short label (repo/dir basename)
-	Title     string   `json:"title"`   // session's ai-title, how Bit names it to siblings
-	UpdatedAt int64    `json:"updated_at"`
-	CtxPct    float64  `json:"ctx_pct"` // -1 when unknown
-	Samples   []sample `json:"samples,omitempty"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`   // state.State.String()
+	Project   string `json:"project"` // short label (repo/dir basename)
+	Title     string `json:"title"`   // session's ai-title, how Bit names it to siblings
+	UpdatedAt int64  `json:"updated_at"`
+	// LastActiveAt is when this session last made progress (the turn's last real
+	// activity), as opposed to UpdatedAt, which advances on every render while the
+	// terminal is open. The roster's AGE is measured from this so a session that
+	// stalled or finished hours ago reads as "3h", not "0s". 0 when unknown (no
+	// turn yet); the roster falls back to UpdatedAt.
+	LastActiveAt int64    `json:"last_active_at,omitempty"`
+	CtxPct       float64  `json:"ctx_pct"` // -1 when unknown
+	Samples      []sample `json:"samples,omitempty"`
 	// DoneSince is when this session last stopped working (working/agents ->
 	// resting). It's the "a turn just finished" signal a sibling uses to nudge
 	// "come take a look". 0 while busy or before any work has completed.
@@ -177,6 +183,38 @@ func completionStamp(prev Beat, newState string, now time.Time) int64 {
 	default: // busy or alert
 		return 0
 	}
+}
+
+// restRosterTTL is how long a finished (done/redeemed) or stalled (stopped)
+// session may linger in the roster before it's hidden as noise. It's measured
+// from Age (last real activity), so a terminal left open after a turn finished
+// or hung still drops off the list once it's this stale — even though it keeps
+// beating. Live work (working/agents) and unanswered alerts (waiting/failed)
+// are never hidden.
+const restRosterTTL = 10 * time.Minute
+
+// RosterVisible reports whether a beat still belongs in the human roster. A
+// done, redeemed, or stalled session is dropped once its last activity is older
+// than restRosterTTL; every other state stays.
+func RosterVisible(b Beat, now time.Time) bool {
+	switch b.State {
+	case "done", "redeemed", "stopped":
+		return Age(b, now) <= restRosterTTL
+	default:
+		return true
+	}
+}
+
+// Age is how long since this session last made progress — measured from
+// LastActiveAt (the turn's last real activity) when known, else from UpdatedAt.
+// This is the roster's AGE: it reflects "how long like this", not the ~1s gap
+// since the last render, so a long-stalled or long-finished session reads true.
+func Age(b Beat, now time.Time) time.Duration {
+	ts := b.UpdatedAt
+	if b.LastActiveAt > 0 {
+		ts = b.LastActiveAt
+	}
+	return now.Sub(time.Unix(ts, 0))
 }
 
 // Stale reports whether a heartbeat has gone quiet long enough that the session

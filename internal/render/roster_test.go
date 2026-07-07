@@ -63,6 +63,30 @@ func TestRosterStale(t *testing.T) {
 	}
 }
 
+// AGE measures how long the session has been like this, not the ~1s gap since
+// the last render: a live session that stalled hours ago still beats every
+// second (UpdatedAt ≈ now), so AGE must come from LastActiveAt. Guards the
+// "stalled for hours, AGE 0s forever" bug.
+func TestRosterAgeFromLastActive(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	beats := []sessions.Beat{
+		{
+			State:        "stopped",
+			Project:      "api2-zero",
+			Title:        "Set up cd alias",
+			UpdatedAt:    now.Unix(), // still beating: terminal open
+			LastActiveAt: now.Add(-3 * time.Hour).Unix(),
+		},
+	}
+	row := Roster(beats, now, false)[1]
+	if !strings.Contains(row, "3h") {
+		t.Errorf("stalled row should show time since last activity (3h), got %q", row)
+	}
+	if strings.Contains(row, "0s") {
+		t.Errorf("AGE must not collapse to 0s for a live-but-stalled session, got %q", row)
+	}
+}
+
 func TestRosterColorsStateCellOnly(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	beats := []sessions.Beat{{State: "failed", Project: "api", Title: "x", UpdatedAt: now.Unix()}}

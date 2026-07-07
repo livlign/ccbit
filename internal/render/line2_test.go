@@ -171,6 +171,35 @@ func TestSiblingClauseCompletion(t *testing.T) {
 	}
 }
 
+func TestSiblingClauseStalledAgesOut(t *testing.T) {
+	c := ctx()
+	now := c.Now
+	// A freshly stalled session is still worth naming.
+	c.Siblings = []sessions.Beat{
+		{State: "stopped", Project: "api", Title: "Set up cd alias for current folder",
+			LastActiveAt: now.Add(-2 * time.Minute).Unix(), UpdatedAt: now.Unix()},
+	}
+	want := `The session "Set up cd alias for current folder" stalled`
+	if got := siblingClause(c); got != want {
+		t.Fatalf("fresh stalled clause = %q, want %q", got, want)
+	}
+
+	// The same session left open all morning keeps beating (UpdatedAt fresh) but
+	// hasn't made progress in hours — it must drop off line 2, not nag forever.
+	c.Siblings[0].LastActiveAt = now.Add(-3 * time.Hour).Unix()
+	if got := siblingClause(c); got != "" {
+		t.Fatalf("long-stalled session should age out, got %q", got)
+	}
+
+	// An alert (failed/waiting) is exempt: it genuinely needs you, however old.
+	c.Siblings = []sessions.Beat{
+		{State: "failed", Project: "api", LastActiveAt: now.Add(-3 * time.Hour).Unix(), UpdatedAt: now.Unix()},
+	}
+	if got := siblingClause(c); !strings.Contains(got, "crashed") {
+		t.Fatalf("old alert should still show, got %q", got)
+	}
+}
+
 func TestLongerThanUsual(t *testing.T) {
 	c := ctx()
 	c.TypicalTurn = time.Minute

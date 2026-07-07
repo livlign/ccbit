@@ -164,3 +164,27 @@ func TestActionable(t *testing.T) {
 		}
 	}
 }
+
+func TestRosterVisible(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	fresh := now.Add(-5 * time.Minute).Unix()
+	stale := now.Add(-11 * time.Minute).Unix()
+
+	// done/redeemed/stopped drop off once their last activity is past restRosterTTL.
+	for _, s := range []string{"done", "redeemed", "stopped"} {
+		if !RosterVisible(Beat{State: s, UpdatedAt: now.Unix(), LastActiveAt: fresh}, now) {
+			t.Errorf("%q with fresh activity should be visible", s)
+		}
+		// Still beating (UpdatedAt = now) but last active long ago: must be hidden.
+		if RosterVisible(Beat{State: s, UpdatedAt: now.Unix(), LastActiveAt: stale}, now) {
+			t.Errorf("%q stale-but-beating should be hidden", s)
+		}
+	}
+
+	// Live work and unanswered alerts are never hidden, however old.
+	for _, s := range []string{"working", "agents", "waiting", "failed", "idle"} {
+		if !RosterVisible(Beat{State: s, UpdatedAt: now.Unix(), LastActiveAt: stale}, now) {
+			t.Errorf("%q should always be visible", s)
+		}
+	}
+}

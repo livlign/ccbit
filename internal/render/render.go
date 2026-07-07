@@ -401,19 +401,23 @@ func line2(c Ctx) string {
 // it's a light note ("3 other sessions running"); a single idle one isn't worth
 // mentioning. Empty when no other session is live.
 func siblingClause(c Ctx) string {
-	others := c.Siblings
-	// Drop any sibling that shares this session's title: it's the same work
-	// (resume/fork/dupe heartbeat), and naming the window you're in is redundant.
-	if c.SelfTitle != "" {
-		kept := make([]sessions.Beat, 0, len(others))
-		for _, b := range others {
-			if b.Title == c.SelfTitle {
-				continue
-			}
-			kept = append(kept, b)
+	kept := make([]sessions.Beat, 0, len(c.Siblings))
+	for _, b := range c.Siblings {
+		// Drop any sibling that shares this session's title: it's the same work
+		// (resume/fork/dupe heartbeat), and naming the window you're in is redundant.
+		if c.SelfTitle != "" && b.Title == c.SelfTitle {
+			continue
 		}
-		others = kept
+		// Drop a sibling that's aged out of the roster — a stalled (stopped) turn
+		// left open keeps beating, so without this it would ride line 2 forever.
+		// Reusing RosterVisible keeps line 2 and the roster in agreement and caps
+		// only the stale stopped/done cases; failed and waiting stay forever.
+		if !sessions.RosterVisible(b, c.Now) {
+			continue
+		}
+		kept = append(kept, b)
 	}
+	others := kept
 	if len(others) == 0 {
 		return ""
 	}

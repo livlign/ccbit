@@ -124,7 +124,16 @@ func renderSessions(jsonOut bool, w io.Writer) int {
 		fmt.Fprintln(w, string(b))
 		return 0
 	}
-	for _, line := range render.Roster(beats, now, os.Getenv("NO_COLOR") == "") {
+	// Hide finished/stalled sessions that have been quiet too long — a terminal
+	// left open after a turn finished or hung keeps beating but is no longer news.
+	// --json above stays the complete raw feed.
+	visible := make([]sessions.Beat, 0, len(beats))
+	for _, b := range beats {
+		if sessions.RosterVisible(b, now) {
+			visible = append(visible, b)
+		}
+	}
+	for _, line := range render.Roster(visible, now, os.Getenv("NO_COLOR") == "") {
 		fmt.Fprintln(w, line)
 	}
 	return 0
@@ -208,6 +217,14 @@ func statusLine() {
 		turnRemoved = max(0, in.LinesRemoved-baseRemoved)
 	}
 
+	// lastActiveAt is the turn's last real activity (now - LastAge). The roster
+	// measures AGE from this rather than the heartbeat's UpdatedAt, which advances
+	// every render while the terminal stays open; 0 when there's no turn yet.
+	var lastActiveAt int64
+	if v.HasLastAge {
+		lastActiveAt = now.Add(-v.LastAge).Unix()
+	}
+
 	// Heartbeat: record this session's state for sibling sessions to read, and
 	// get back our own context-window velocity from the rolling ctx samples.
 	trend := sessions.Record(sessions.Beat{
@@ -215,6 +232,7 @@ func statusLine() {
 		State:            v.State.String(),
 		Project:          label,
 		Title:            title,
+		LastActiveAt:     lastActiveAt,
 		LastTurnStart:    lastTurnStart,
 		LinesBaseTurn:    baseTurn,
 		LinesBaseAdded:   baseAdded,

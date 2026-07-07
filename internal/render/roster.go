@@ -29,7 +29,7 @@ func Roster(beats []sessions.Beat, now time.Time, colorOn bool) []string {
 		}
 		rows[i] = row{
 			status:  status,
-			age:     fmtAge(now.Sub(time.Unix(b.UpdatedAt, 0))),
+			age:     fmtAge(sessions.Age(b, now)),
 			project: dash(b.Project),
 			session: dash(b.Title),
 		}
