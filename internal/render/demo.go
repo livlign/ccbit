@@ -93,7 +93,7 @@ func Demo(colorOn bool) []string {
 	ctxPct := 38.0
 	full := withLines(base, 885, 99)
 	full.In = input.Stdin{CurrentDir: root, ModelName: "Opus", CtxPct: &ctxPct}
-	full.Git = gitx.Info{Branch: "main", Dirty: 2, Ahead: 1}
+	full.Git = gitx.Info{Branch: "main", New: 1, Modified: 2, Deleted: 1, Ahead: 1}
 	full.Trend = sessions.TrendUp
 	full.Siblings = []sessions.Beat{
 		{State: "failed", Project: "api", Title: "Fix login bug", UpdatedAt: now.Unix()},

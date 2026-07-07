@@ -23,11 +23,16 @@ import (
 
 // Info is the rendered subset of git state.
 type Info struct {
-	Branch string // branch name, or short detached hash, "" if unknown
-	Dirty  int    // modified/untracked paths in the worktree
-	Ahead  int    // commits ahead of upstream
-	Behind int    // commits behind upstream
+	Branch   string // branch name, or short detached hash, "" if unknown
+	New      int    // untracked or newly-added paths
+	Modified int    // modified/renamed/copied paths
+	Deleted  int    // deleted paths
+	Ahead    int    // commits ahead of upstream
+	Behind   int    // commits behind upstream
 }
+
+// Dirty is the total count of changed paths in the worktree.
+func (i Info) Dirty() int { return i.New + i.Modified + i.Deleted }
 
 // statusTTL bounds how often the git status subprocess may run per repo.
 const statusTTL = 45 * time.Second
@@ -69,12 +74,13 @@ func Branch(root string) string {
 	return ""
 }
 
-// Status returns dirty/ahead/behind, refreshed via `git status` at most once per
-// statusTTL (cached on disk per repo, like the repo-root cache: disposable,
-// never authoritative). Returns zeros when git is slow, absent, or upstream-less.
-func Status(root string, now time.Time) (dirty, ahead, behind int) {
+// Status returns the changed-path breakdown plus ahead/behind, refreshed via
+// `git status` at most once per statusTTL (cached on disk per repo, like the
+// repo-root cache: disposable, never authoritative). Returns zeros when git is
+// slow, absent, or upstream-less.
+func Status(root string, now time.Time) (new_, modified, deleted, ahead, behind int) {
 	if root == "" {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	cache := cachePath(root)
 	if fi, err := os.Stat(cache); err == nil && now.Sub(fi.ModTime()) < statusTTL {
@@ -82,19 +88,19 @@ func Status(root string, now time.Time) (dirty, ahead, behind int) {
 			return parseCache(b)
 		}
 	}
-	dirty, ahead, behind = liveStatus(root)
+	new_, modified, deleted, ahead, behind = liveStatus(root)
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err == nil {
-		_ = os.WriteFile(cache, fmt.Appendf(nil, "%d %d %d", dirty, ahead, behind), 0o644)
+		_ = os.WriteFile(cache, fmt.Appendf(nil, "%d %d %d %d %d", new_, modified, deleted, ahead, behind), 0o644)
 	}
-	return dirty, ahead, behind
+	return new_, modified, deleted, ahead, behind
 }
 
-func liveStatus(root string) (dirty, ahead, behind int) {
+func liveStatus(root string) (new_, modified, deleted, ahead, behind int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain=v1", "-b").Output()
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	return parsePorcelain(out)
 }
@@ -102,8 +108,10 @@ func liveStatus(root string) (dirty, ahead, behind int) {
 var aheadBehindRe = regexp.MustCompile(`\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]`)
 
 // parsePorcelain reads `git status --porcelain=v1 -b` output: the "## branch"
-// header carries [ahead N, behind M]; every following line is a dirty path.
-func parsePorcelain(out []byte) (dirty, ahead, behind int) {
+// header carries [ahead N, behind M]; every following line is a dirty path
+// whose two-char XY code sorts it into new (untracked/added), deleted, or
+// modified (everything else — modify, rename, copy, type change).
+func parsePorcelain(out []byte) (new_, modified, deleted, ahead, behind int) {
 	for _, line := range bytes.Split(out, []byte("\n")) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
@@ -115,14 +123,25 @@ func parsePorcelain(out []byte) (dirty, ahead, behind int) {
 			}
 			continue
 		}
-		dirty++
+		if len(line) < 2 {
+			continue
+		}
+		x, y := line[0], line[1]
+		switch {
+		case x == '?' || x == 'A' || y == 'A':
+			new_++
+		case x == 'D' || y == 'D':
+			deleted++
+		default:
+			modified++
+		}
 	}
-	return dirty, ahead, behind
+	return new_, modified, deleted, ahead, behind
 }
 
-func parseCache(b []byte) (dirty, ahead, behind int) {
-	_, _ = fmt.Sscanf(string(b), "%d %d %d", &dirty, &ahead, &behind)
-	return dirty, ahead, behind
+func parseCache(b []byte) (new_, modified, deleted, ahead, behind int) {
+	_, _ = fmt.Sscanf(string(b), "%d %d %d %d %d", &new_, &modified, &deleted, &ahead, &behind)
+	return new_, modified, deleted, ahead, behind
 }
 
 func cachePath(root string) string {

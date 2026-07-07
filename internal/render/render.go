@@ -204,8 +204,65 @@ func Render(v state.View, c Ctx) []string {
 	// the state color for the rest of the line).
 	if clause := siblingClause(c); clause != "" {
 		l1 += " · " + clause
+	} else if v.State == state.Idle {
+		// A genuinely quiet moment (idle, nothing to say about siblings) is where
+		// a discovery hint fits without ever competing with real news.
+		if tip := idleTip(c); tip != "" {
+			l1 += " · " + tip
+		}
 	}
 	return []string{l1, line2(c)}
+}
+
+// tipPeriodSecs is how long one rotation slot lasts; tipShowEvery is how many
+// slots pass between tips (so most of the time idle reads plain).
+const (
+	tipPeriodSecs = 20
+	tipShowEvery  = 3
+)
+
+// idleTip advertises one still-off visual feature during a quiet idle moment,
+// rotating slowly through whichever remain off and staying blank most of the
+// time. Returns "" once every feature is enabled. Keyed off c.Now so it's
+// stable within a slot (no flicker between 1s repaints) and testable.
+func idleTip(c Ctx) string {
+	tips := offFeatureTips()
+	if len(tips) == 0 {
+		return ""
+	}
+	slot := c.Now.Unix() / tipPeriodSecs
+	if slot%tipShowEvery != 0 {
+		return "" // a resting slot: idle reads plain
+	}
+	i := int((slot / tipShowEvery) % int64(len(tips)))
+	tip := "tip: " + tips[i]
+	if c.ColorOn {
+		tip = colorize(tip, dim) // a faint aside, never louder than the state
+	}
+	return tip
+}
+
+// offFeatureTips lists a one-line enable hint for each visual feature that is
+// currently off, in a stable order. Polished, imperative, and self-describing:
+// the env var name is the action.
+func offFeatureTips() []string {
+	var tips []string
+	if !nerdFont() {
+		tips = append(tips, "set CCBIT_NERD_FONT=1 for Nerd Font icons")
+	}
+	if !gitColorOn() {
+		tips = append(tips, "set CCBIT_GIT_COLOR=1 to color git changes")
+	}
+	if !useIcons() {
+		tips = append(tips, "set CCBIT_ICONS=1 for per-segment icons")
+	}
+	if !ctxGaugeOn() {
+		tips = append(tips, "set CCBIT_CTX_GAUGE=1 for a context gauge")
+	}
+	if !rateColorOn() {
+		tips = append(tips, "set CCBIT_RATE_COLOR=1 to color rate-limit meters")
+	}
+	return tips
 }
 
 // line1Color maps a state to its whole-line color. Alert states stand out (red
@@ -305,22 +362,34 @@ func line1(v state.View, c Ctx) string {
 	}
 }
 
+// modelSegment renders the model with its reasoning effort in parens, e.g.
+// "Opus 4.8 (high)". Effort is omitted when unknown.
+func modelSegment(model, effort string) string {
+	if model == "" {
+		return ""
+	}
+	if effort != "" {
+		return model + " (" + effort + ")"
+	}
+	return model
+}
+
 func line2(c Ctx) string {
 	var parts []string
 	if d := dirLabel(c.In.CurrentDir); d != "" {
-		parts = append(parts, d)
+		parts = append(parts, withIcon(iconDir, d))
 	}
-	if g := gitSegment(c.Git); g != "" {
+	if g := gitSegment(c.Git, c.ColorOn); g != "" {
 		parts = append(parts, g)
 	}
-	if c.In.ModelName != "" {
-		parts = append(parts, c.In.ModelName)
+	if seg := modelSegment(c.In.ModelName, c.In.Effort); seg != "" {
+		parts = append(parts, withIcon(iconModel, seg))
 	}
 	parts = append(parts, ctxSegment(c))
-	if seg := rateSegment("5h", c.In.FiveHour, c.Now); seg != "" {
+	if seg := rateSegment("5h", c.In.FiveHour, c.Now, c.ColorOn); seg != "" {
 		parts = append(parts, seg)
 	}
-	if seg := rateSegment("7d", c.In.SevenDay, c.Now); seg != "" {
+	if seg := rateSegment("7d", c.In.SevenDay, c.Now, c.ColorOn); seg != "" {
 		parts = append(parts, seg)
 	}
 	return strings.Join(parts, " · ")
@@ -732,22 +801,90 @@ func lastActivity(t transcript.Turn, root, projectDir string) string {
 
 // --- line-2 helpers ---
 
-// gitSegment is where the work is going: "main* ↑2" = on main, uncommitted
-// changes, 2 commits not pushed. Each mark appears only when true, so a clean,
-// synced branch is just its name.
-func gitSegment(g gitx.Info) string {
+// gitSegment is where the work is going: "main +1 ~3 -2 ↑2" = on main, 1 new
+// path, 3 modified, 2 deleted, 2 commits not pushed. Each mark appears only
+// when nonzero, so a clean, synced branch is just its name. When CCBIT_NERD_FONT
+// is set the change marks use Nerd Font glyphs (plus/pencil/trash); CCBIT_ICONS
+// adds a leading branch glyph; CCBIT_GIT_COLOR tints the marks green/yellow/red.
+func gitSegment(g gitx.Info, colorOn bool) string {
 	if g.Branch == "" {
 		return ""
 	}
-	s := g.Branch
-	if g.Dirty > 0 {
-		s += "*"
-	}
+	nf := nerdFont()
+	color := colorOn && gitColorOn()
+	s := withIcon(iconBranch, g.Branch)
+	s += changeMark(nf, color, g.New, "+", green, "")       // nf-fa-plus
+	s += changeMark(nf, color, g.Modified, "~", yellow, "") // nf-fa-pencil
+	s += changeMark(nf, color, g.Deleted, "-", red, "")     // nf-fa-trash
 	if g.Ahead > 0 {
 		s += fmt.Sprintf(" ↑%d", g.Ahead)
 	}
 	if g.Behind > 0 {
 		s += fmt.Sprintf(" ↓%d", g.Behind)
+	}
+	return s
+}
+
+// changeMark renders one worktree-change count. Nerd Font glyphs get a space
+// before the number (they're icons); the ASCII signs hug it (+3, ~3, -3). When
+// color is on the mark is tinted with its category color.
+func changeMark(nf, color bool, n int, ascii, colorCode, glyph string) string {
+	if n <= 0 {
+		return ""
+	}
+	var mark string
+	if nf {
+		mark = fmt.Sprintf(" %s %d", glyph, n)
+	} else {
+		mark = fmt.Sprintf(" %s%d", ascii, n)
+	}
+	if color {
+		mark = colorize(mark, colorCode)
+	}
+	return mark
+}
+
+// Optional visual features, each opt-in via its own env var (default off). They
+// stay off by default because none can be safely auto-detected: Nerd Font glyphs
+// show as tofu without a patched font, and color/gauges are a matter of taste.
+// A quiet idle line advertises whichever are still off (see idleTip).
+const (
+	envNerdFont  = "CCBIT_NERD_FONT"  // Nerd Font glyphs for git change marks
+	envIcons     = "CCBIT_ICONS"      // a leading Nerd Font icon per ambient segment
+	envGitColor  = "CCBIT_GIT_COLOR"  // color git change marks (green/yellow/red)
+	envCtxGauge  = "CCBIT_CTX_GAUGE"  // a mini fill bar beside the ctx percentage
+	envRateColor = "CCBIT_RATE_COLOR" // escalate 5h/7d rate limits to yellow/red
+)
+
+// envOn reports whether an opt-in env var is set to a truthy value.
+func envOn(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+func nerdFont() bool    { return envOn(envNerdFont) }
+func useIcons() bool    { return envOn(envIcons) }
+func gitColorOn() bool  { return envOn(envGitColor) }
+func ctxGaugeOn() bool  { return envOn(envCtxGauge) }
+func rateColorOn() bool { return envOn(envRateColor) }
+
+// Nerd Font glyphs used as leading segment icons (nf-fa family). Each renders at
+// single width in a patched font, tofu without one — hence the CCBIT_ICONS gate.
+const (
+	iconDir    = "" // nf-fa-folder
+	iconBranch = "" // nf-fa-code_branch
+	iconModel  = "" // nf-fa-microchip
+	iconCtx    = "" // nf-fa-tachometer
+	iconRate   = "" // nf-fa-clock_o
+)
+
+// withIcon prefixes a segment with a Nerd Font icon when CCBIT_ICONS is on.
+func withIcon(glyph, s string) string {
+	if useIcons() {
+		return glyph + " " + s
 	}
 	return s
 }
@@ -768,11 +905,19 @@ func dirLabel(dir string) string {
 }
 
 func ctxSegment(c Ctx) string {
+	label := "ctx"
+	if useIcons() {
+		label = iconCtx
+	}
 	if c.In.CtxPct == nil {
-		return "ctx --"
+		return label + " --"
 	}
 	pct := int(*c.In.CtxPct + 0.5)
-	body := fmt.Sprintf("ctx %d%%", pct) + trendArrow(c.Trend)
+	body := label + " "
+	if ctxGaugeOn() {
+		body += gaugeBar(pct) + " "
+	}
+	body += fmt.Sprintf("%d%%", pct) + trendArrow(c.Trend)
 	if !c.ColorOn {
 		return body
 	}
@@ -786,6 +931,23 @@ func ctxSegment(c Ctx) string {
 	default:
 		return body
 	}
+}
+
+// gaugeCells is the width of the ctx fill bar.
+const gaugeCells = 5
+
+// gaugeBar renders a small fill bar for a 0-100 percentage: filled cells (▆)
+// then empty ones (▁), so context pressure reads at a glance. Both glyphs are
+// widely-supported block elements — no Nerd Font needed.
+func gaugeBar(pct int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := (pct*gaugeCells + 50) / 100
+	return strings.Repeat("▆", filled) + strings.Repeat("▁", gaugeCells-filled)
 }
 
 // trendArrow renders context-window velocity: rising (↑) during active work,
@@ -802,14 +964,25 @@ func trendArrow(t sessions.Trend) string {
 	}
 }
 
-func rateSegment(label string, rl *input.RateLimit, now time.Time) string {
+func rateSegment(label string, rl *input.RateLimit, now time.Time, colorOn bool) string {
 	if rl == nil || rl.UsedPercentage == nil {
 		return ""
 	}
-	seg := fmt.Sprintf("%s %d%%", label, int(*rl.UsedPercentage+0.5))
+	pct := int(*rl.UsedPercentage + 0.5)
+	seg := fmt.Sprintf("%s %d%%", label, pct)
 	if rl.HasReset {
 		if d := rl.ResetsAt.Sub(now); d > 0 {
 			seg += fmt.Sprintf(" (%s)", fmtCountdown(d))
+		}
+	}
+	seg = withIcon(iconRate, seg)
+	// CCBIT_RATE_COLOR escalates a limit nearing its cap, mirroring ctx%.
+	if colorOn && rateColorOn() {
+		switch {
+		case pct >= 90:
+			seg = colorize(seg, red)
+		case pct >= 70:
+			seg = colorize(seg, yellow)
 		}
 	}
 	return seg

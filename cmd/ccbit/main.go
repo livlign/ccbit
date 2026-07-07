@@ -255,7 +255,7 @@ func statusLine() {
 func gitInfo(root string, now time.Time) gitx.Info {
 	g := gitx.Info{Branch: gitx.Branch(root)}
 	if g.Branch != "" {
-		g.Dirty, g.Ahead, g.Behind = gitx.Status(root, now)
+		g.New, g.Modified, g.Deleted, g.Ahead, g.Behind = gitx.Status(root, now)
 	}
 	return g
 }

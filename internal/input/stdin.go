@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -21,6 +23,7 @@ type Stdin struct {
 	TranscriptPath string
 	Cwd            string
 	ModelName      string
+	Effort         string // reasoning effort (e.g. "high"), from CLAUDE_EFFORT
 	CurrentDir     string
 	ProjectDir     string
 	Version        string
@@ -73,7 +76,8 @@ func Parse(r io.Reader) Stdin {
 		SessionID:      raw.SessionID,
 		TranscriptPath: raw.TranscriptPath,
 		Cwd:            raw.Cwd,
-		ModelName:      raw.Model.DisplayName,
+		ModelName:      cleanModelName(raw.Model.DisplayName),
+		Effort:         strings.ToLower(strings.TrimSpace(os.Getenv("CLAUDE_EFFORT"))),
 		CurrentDir:     raw.Workspace.CurrentDir,
 		ProjectDir:     raw.Workspace.ProjectDir,
 		Version:        raw.Version,
@@ -90,6 +94,20 @@ func Parse(r io.Reader) Stdin {
 		s.SevenDay = convertRate(raw.RateLimits.SevenDay)
 	}
 	return s
+}
+
+// cleanModelName drops a trailing context-window parenthetical that Claude Code
+// appends to some display names (e.g. "Opus 4.8 (1M context)" → "Opus 4.8"), so
+// the status line can present its own effort parenthetical instead.
+func cleanModelName(name string) string {
+	name = strings.TrimSpace(name)
+	if i := strings.LastIndex(name, "("); i > 0 {
+		tail := name[i:]
+		if strings.Contains(strings.ToLower(tail), "context") {
+			name = strings.TrimSpace(name[:i])
+		}
+	}
+	return name
 }
 
 func convertRate(r *rawRate) *RateLimit {

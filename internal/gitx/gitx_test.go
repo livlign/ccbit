@@ -47,21 +47,21 @@ func TestBranchWorktreeFile(t *testing.T) {
 }
 
 func TestParsePorcelain(t *testing.T) {
-	out := []byte("## main...origin/main [ahead 2, behind 1]\n M cmd/main.go\n?? new.txt\n")
-	dirty, ahead, behind := parsePorcelain(out)
-	if dirty != 2 || ahead != 2 || behind != 1 {
-		t.Fatalf("got %d/%d/%d, want 2/2/1", dirty, ahead, behind)
+	out := []byte("## main...origin/main [ahead 2, behind 1]\n M cmd/main.go\n?? new.txt\n D gone.go\nA  staged.go\n")
+	new_, mod, del, ahead, behind := parsePorcelain(out)
+	if new_ != 2 || mod != 1 || del != 1 || ahead != 2 || behind != 1 {
+		t.Fatalf("got new=%d mod=%d del=%d ahead=%d behind=%d, want 2/1/1/2/1", new_, mod, del, ahead, behind)
 	}
 
 	out = []byte("## main...origin/main\n")
-	dirty, ahead, behind = parsePorcelain(out)
-	if dirty != 0 || ahead != 0 || behind != 0 {
-		t.Fatalf("clean synced repo: got %d/%d/%d, want zeros", dirty, ahead, behind)
+	new_, mod, del, ahead, behind = parsePorcelain(out)
+	if new_ != 0 || mod != 0 || del != 0 || ahead != 0 || behind != 0 {
+		t.Fatalf("clean synced repo: got new=%d mod=%d del=%d ahead=%d behind=%d, want zeros", new_, mod, del, ahead, behind)
 	}
 
 	out = []byte("## main...origin/main [ahead 3]\n M a\n")
-	dirty, ahead, behind = parsePorcelain(out)
-	if dirty != 1 || ahead != 3 || behind != 0 {
-		t.Fatalf("ahead-only: got %d/%d/%d, want 1/3/0", dirty, ahead, behind)
+	new_, mod, del, ahead, behind = parsePorcelain(out)
+	if new_ != 0 || mod != 1 || del != 0 || ahead != 3 || behind != 0 {
+		t.Fatalf("ahead-only: got new=%d mod=%d del=%d ahead=%d behind=%d, want 0/1/0/3/0", new_, mod, del, ahead, behind)
 	}
 }
