@@ -248,9 +248,7 @@ func TestAmbientGradient(t *testing.T) {
 	t.Setenv("CCBIT_AMBIENT_COLOR", "1") // bare truthy => gradient
 	c := ctx()
 	c.ColorOn = true
-	pct := 38.0
-	c.In.CtxPct = &pct
-	c.Git = gitx.Info{Branch: "main"}
+	c.Git = gitx.Info{Branch: "main"} // no ctx/rate metrics => zero pressure => base palette
 	l2 := Render(state.View{State: state.Idle}, c)[1]
 	// The whole line is washed with per-glyph truecolor gradient escapes, not the
 	// flat 256-color segment accents.
@@ -260,7 +258,7 @@ func TestAmbientGradient(t *testing.T) {
 	if strings.Contains(l2, ambDir) || strings.Contains(l2, ambBranch) {
 		t.Fatalf("gradient line2 = %q, should not carry flat segment accents", l2)
 	}
-	// The endpoints are the palette's first and last stops.
+	// At zero pressure the endpoints are the calm palette's first and last stops.
 	first := gradientStops[0]
 	last := gradientStops[len(gradientStops)-1]
 	if !strings.Contains(l2, fmt.Sprintf("\x1b[38;2;%d;%d;%dm", first[0], first[1], first[2])) {
@@ -277,16 +275,61 @@ func TestAmbientGradient(t *testing.T) {
 	}
 }
 
-func TestAmbientGradientPressureWins(t *testing.T) {
+func TestAmbientPressureWarmsPalette(t *testing.T) {
 	clearFeatureEnv(t)
 	t.Setenv("CCBIT_AMBIENT_COLOR", "1")
 	c := ctx()
 	c.ColorOn = true
-	hot := 95.0
+
+	// Calm: no metrics => zero pressure => the base palette start color.
+	base0 := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", gradientStops[0][0], gradientStops[0][1], gradientStops[0][2])
+	if calm := Render(state.View{State: state.Idle}, c)[1]; !strings.Contains(calm, base0) {
+		t.Fatalf("calm line = %q, want the base palette start %q", calm, base0)
+	}
+
+	// Intense: a maxed context warms the palette. The first stop's red channel
+	// climbs, and the calm start color is gone.
+	hot := 96.0
 	c.In.CtxPct = &hot
-	// A ctx over the warning band punches its red through the gradient.
-	if l2 := Render(state.View{State: state.Idle}, c)[1]; !strings.Contains(l2, red) {
-		t.Fatalf("hot ctx = %q, want red punching through the gradient", l2)
+	ps := pressureStops(0.96)
+	if ps[0][0] <= gradientStops[0][0] {
+		t.Fatalf("pressure should raise the first stop's red channel: %d -> %d", gradientStops[0][0], ps[0][0])
+	}
+	hot0 := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", ps[0][0], ps[0][1], ps[0][2])
+	line := Render(state.View{State: state.Idle}, c)[1]
+	if !strings.Contains(line, hot0) {
+		t.Fatalf("intense line = %q, want warmed start color %q", line, hot0)
+	}
+	if strings.Contains(line, base0) {
+		t.Fatalf("intense line = %q, should no longer use the calm start color", line)
+	}
+}
+
+func TestAmbientGradientAnimatesWhileWorking(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_AMBIENT_COLOR", "1")
+	c := ctx()
+	c.ColorOn = true
+	pct := 38.0
+	c.In.CtxPct = &pct
+
+	// While working the sweep is phase-driven: two times a couple of seconds apart
+	// (within one sweep period) paint the line differently.
+	c.Now = time.UnixMilli(0)
+	a := Render(state.View{State: state.Working}, c)[1]
+	c.Now = time.UnixMilli(gradPeriodMs / 4)
+	b := Render(state.View{State: state.Working}, c)[1]
+	if a == b {
+		t.Fatalf("working gradient should advance with time, but both frames matched:\n%q", a)
+	}
+
+	// Idle rests: the same two times paint identically (a calm static blend).
+	c.Now = time.UnixMilli(0)
+	x := Render(state.View{State: state.Idle}, c)[1]
+	c.Now = time.UnixMilli(gradPeriodMs / 4)
+	y := Render(state.View{State: state.Idle}, c)[1]
+	if x != y {
+		t.Fatalf("idle gradient should be static, but frames differed:\n%q\n%q", x, y)
 	}
 }
 

@@ -6,6 +6,7 @@ package render
 import (
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,7 +208,7 @@ func Render(v state.View, c Ctx) []string {
 			l1 += " · " + tip
 		}
 	}
-	return []string{l1, line2(c)}
+	return []string{l1, line2(c, v.State == state.Working)}
 }
 
 // tipPeriodSecs is how long one rotation slot lasts; tipShowEvery is how many
@@ -373,13 +374,15 @@ func modelSegment(model, effort string) string {
 	return model
 }
 
-func line2(c Ctx) string {
+func line2(c Ctx, working bool) string {
 	// CCBIT_AMBIENT_COLOR turns the otherwise-grey ambient line colorful. In
 	// "gradient" mode (the default when on) the whole line is one smooth
 	// left-to-right color blend; in "segments" mode each segment gets its own flat
 	// accent hue. Either way the ctx/rate pressure warnings still punch through.
+	// While working the gradient marches left-to-right; on every other state it
+	// rests as a calm static blend.
 	if c.ColorOn && ambientMode() == "gradient" {
-		return line2Gradient(c)
+		return line2Gradient(c, working)
 	}
 	amb := c.ColorOn && ambientMode() == "segments"
 	var parts []string
@@ -411,44 +414,109 @@ type gspan struct{ text, fixed string }
 // smooth left-to-right color gradient across every glyph so the segments read as
 // one blended band instead of separate blocks. Pressure warnings on ctx/rate
 // keep their alert color and interrupt the gradient on purpose.
-func line2Gradient(c Ctx) string {
+func line2Gradient(c Ctx, working bool) string {
 	var spans []gspan
-	add := func(text, fixed string) {
+	add := func(text string) {
 		if text == "" {
 			return
 		}
 		if len(spans) > 0 {
 			spans = append(spans, gspan{" · ", ""})
 		}
-		spans = append(spans, gspan{text, fixed})
+		spans = append(spans, gspan{text, ""})
 	}
 	if d := dirLabel(c.In.CurrentDir); d != "" {
-		add(withIcon(iconDir, d), "")
+		add(withIcon(iconDir, d))
 	}
-	add(gitSegment(c.Git, false, false), "") // plain git text; the gradient colors it
+	add(gitSegment(c.Git, false, false)) // plain git text; the gradient colors it
 	if seg := modelSegment(c.In.ModelName, c.In.Effort); seg != "" {
-		add(withIcon(iconModel, seg), "")
+		add(withIcon(iconModel, seg))
 	}
-	add(ctxBody(c), ctxWarn(c))
+	add(ctxBody(c))
 	addRate := func(label string, rl *input.RateLimit) {
 		if rl == nil || rl.UsedPercentage == nil {
 			return
 		}
-		warn := ""
-		if rateColorOn() {
-			warn = rateWarn(rl)
-		}
-		add(rateBody(label, rl, c.Now), warn)
+		add(rateBody(label, rl, c.Now))
 	}
 	addRate("5h", c.In.FiveHour)
 	addRate("7d", c.In.SevenDay)
-	return renderGradient(spans)
+	// The palette itself carries the pressure signal now: calm and cool when
+	// ctx/5h/7d are all low, warming toward a vivid red as the worst of them
+	// climbs. So the ambient line no longer needs per-segment warning punch-through.
+	stops := pressureStops(ambientPressure(c))
+	return renderGradient(spans, working, c.Now, stops)
 }
+
+// ambientPressure is how loaded the session is, in [0,1]: the worst of the
+// context window and the two rate-limit meters. It drives how warm/intense the
+// gradient runs.
+func ambientPressure(c Ctx) float64 {
+	p := 0.0
+	consider := func(pct *float64) {
+		if pct != nil && *pct/100 > p {
+			p = *pct / 100
+		}
+	}
+	consider(c.In.CtxPct)
+	if c.In.FiveHour != nil {
+		consider(c.In.FiveHour.UsedPercentage)
+	}
+	if c.In.SevenDay != nil {
+		consider(c.In.SevenDay.UsedPercentage)
+	}
+	if p > 1 {
+		p = 1
+	}
+	if p < 0 {
+		p = 0
+	}
+	return p
+}
+
+// pressureStops warms the calm base palette toward a vivid red as pressure rises:
+// each stop rotates its hue toward red, saturates, and deepens, so a low-load
+// session reads soft and cool while a maxed-out one glows hot. At p==0 it returns
+// the base palette unchanged.
+func pressureStops(p float64) [][3]int {
+	if p <= 0 {
+		return gradientStops
+	}
+	if p > 1 {
+		p = 1
+	}
+	// Ease-in (quadratic): keep low and mid usage calm and cool, so the warm-up
+	// is back-loaded and only a genuinely loaded session glows hot.
+	p = p * p
+	const redHue = 8.0 // orange-red target
+	out := make([][3]int, len(gradientStops))
+	for i, s := range gradientStops {
+		h, sat, l := rgbToHSL(s[0], s[1], s[2])
+		arc := math.Mod(redHue-h, 360)
+		if arc < 0 {
+			arc += 360 // always rotate the same (upward) way for a coherent warm-up
+		}
+		h = math.Mod(h+p*arc, 360)
+		sat += (0.95 - sat) * p // more vivid under load
+		l += (0.58 - l) * p     // a touch deeper, still legible on dark
+		r, g, b := hslToRGB(h, sat, l)
+		out[i] = [3]int{r, g, b}
+	}
+	return out
+}
+
+// gradPeriodMs is how long one full left-to-right sweep takes while working. The
+// status line only repaints about once a second (and irregularly), so animation
+// is capped near 1 FPS: a long period keeps each per-second step small, reading
+// as a slow gentle drift instead of a jerky march. It can never be truly smooth.
+const gradPeriodMs = 12000
 
 // renderGradient paints the spans: gradient glyphs get a per-position truecolor
 // escape sampled along the palette; fixed spans keep their forced color but
 // still advance the position, so a warning never shifts the blend that follows.
-func renderGradient(spans []gspan) string {
+// While working the palette is sampled cyclically with a time-derived phase, so
+// the colors appear to travel left-to-right; otherwise the blend is static.
+func renderGradient(spans []gspan, working bool, now time.Time, stops [][3]int) string {
 	total := 0
 	for _, s := range spans {
 		total += len([]rune(s.text))
@@ -459,6 +527,10 @@ func renderGradient(spans []gspan) string {
 	denom := total - 1
 	if denom < 1 {
 		denom = 1
+	}
+	phase := 0.0
+	if working {
+		phase = float64(now.UnixMilli()%gradPeriodMs) / gradPeriodMs
 	}
 	var b strings.Builder
 	i := 0
@@ -471,13 +543,41 @@ func renderGradient(spans []gspan) string {
 			continue
 		}
 		for _, r := range s.text {
-			rr, gg, bb := gradientColor(float64(i) / float64(denom))
+			pos := float64(i) / float64(denom)
+			var rr, gg, bb int
+			if working {
+				// Subtract the phase so an advancing phase carries color rightward,
+				// and wrap into [0,1) for a seamless loop across the cyclic palette.
+				u := pos - phase
+				if u < 0 {
+					u += 1
+				}
+				rr, gg, bb = gradientColorCyclic(u, stops)
+			} else {
+				rr, gg, bb = gradientColor(pos, stops)
+			}
 			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm%c", rr, gg, bb, r)
 			i++
 		}
 	}
 	b.WriteString(reset)
 	return b.String()
+}
+
+// gradientColorCyclic samples the palette as a seamless loop (the last stop
+// wraps back to the first), so a phase-shifted sweep has no visible seam.
+func gradientColorCyclic(u float64, stops [][3]int) (int, int, int) {
+	u -= float64(int(u)) // fractional part; caller keeps u >= 0
+	n := len(stops)
+	x := u * float64(n)
+	i := int(x)
+	if i >= n {
+		i = n - 1
+	}
+	f := x - float64(i)
+	a, z := stops[i], stops[(i+1)%n]
+	lerp := func(p, q int) int { return int(float64(p) + (float64(q)-float64(p))*f + 0.5) }
+	return lerp(a[0], z[0]), lerp(a[1], z[1]), lerp(a[2], z[2])
 }
 
 // gradientStops are the color anchors of the ambient blend (sky aqua, periwinkle,
@@ -491,14 +591,14 @@ var gradientStops = [][3]int{
 
 // gradientColor samples the stop palette at t in [0,1], linearly interpolating
 // between the two nearest anchors.
-func gradientColor(t float64) (int, int, int) {
+func gradientColor(t float64, stops [][3]int) (int, int, int) {
 	if t <= 0 {
-		s := gradientStops[0]
+		s := stops[0]
 		return s[0], s[1], s[2]
 	}
-	last := len(gradientStops) - 1
+	last := len(stops) - 1
 	if t >= 1 {
-		s := gradientStops[last]
+		s := stops[last]
 		return s[0], s[1], s[2]
 	}
 	x := t * float64(last)
@@ -507,9 +607,85 @@ func gradientColor(t float64) (int, int, int) {
 		i = last - 1
 	}
 	f := x - float64(i)
-	a, z := gradientStops[i], gradientStops[i+1]
+	a, z := stops[i], stops[i+1]
 	lerp := func(p, q int) int { return int(float64(p) + (float64(q)-float64(p))*f + 0.5) }
 	return lerp(a[0], z[0]), lerp(a[1], z[1]), lerp(a[2], z[2])
+}
+
+// rgbToHSL converts 8-bit RGB to hue (degrees), saturation, lightness (0-1).
+func rgbToHSL(ri, gi, bi int) (float64, float64, float64) {
+	r, g, b := float64(ri)/255, float64(gi)/255, float64(bi)/255
+	max := math.Max(r, math.Max(g, b))
+	min := math.Min(r, math.Min(g, b))
+	l := (max + min) / 2
+	if max == min {
+		return 0, 0, l // achromatic
+	}
+	d := max - min
+	var s float64
+	if l > 0.5 {
+		s = d / (2 - max - min)
+	} else {
+		s = d / (max + min)
+	}
+	var h float64
+	switch max {
+	case r:
+		h = (g - b) / d
+		if g < b {
+			h += 6
+		}
+	case g:
+		h = (b-r)/d + 2
+	default:
+		h = (r-g)/d + 4
+	}
+	return h * 60, s, l
+}
+
+// hslToRGB converts hue (degrees), saturation, lightness (0-1) back to 8-bit RGB.
+func hslToRGB(h, s, l float64) (int, int, int) {
+	if s == 0 {
+		v := clamp255(int(l*255 + 0.5))
+		return v, v, v
+	}
+	var q float64
+	if l < 0.5 {
+		q = l * (1 + s)
+	} else {
+		q = l + s - l*s
+	}
+	p := 2*l - q
+	hk := h / 360
+	channel := func(t float64) int {
+		if t < 0 {
+			t += 1
+		}
+		if t > 1 {
+			t -= 1
+		}
+		switch {
+		case t < 1.0/6:
+			return clamp255(int((p+(q-p)*6*t)*255 + 0.5))
+		case t < 1.0/2:
+			return clamp255(int(q*255 + 0.5))
+		case t < 2.0/3:
+			return clamp255(int((p+(q-p)*(2.0/3-t)*6)*255 + 0.5))
+		default:
+			return clamp255(int(p*255 + 0.5))
+		}
+	}
+	return channel(hk + 1.0/3), channel(hk), channel(hk - 1.0/3)
+}
+
+func clamp255(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return v
 }
 
 // accent tints a whole ambient segment with its color when the ambient-color

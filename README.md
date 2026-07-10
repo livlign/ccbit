@@ -146,7 +146,7 @@ Off by default and set independently — none can be safely auto-detected (Nerd 
 | `CCBIT_GIT_COLOR` | color the git change marks: green new, yellow modified, red deleted |
 | `CCBIT_CTX_GAUGE` | a small fill bar beside the context percentage (`ctx ▆▆▁▁▁ 38%`) |
 | `CCBIT_RATE_COLOR` | escalate the 5h / 7d rate-limit meters to yellow (≥70%) then red (≥90%), like `ctx%` |
-| `CCBIT_AMBIENT_COLOR` | wash the ambient line in a smooth cyan→violet→pink gradient instead of leaving it plain grey (`1`/`gradient`); use `segments` for a flat accent hue per segment instead. Either way the pressure colors on `ctx%` and rate still punch through |
+| `CCBIT_AMBIENT_COLOR` | wash the ambient line in a smooth truecolor gradient instead of leaving it plain grey (`1`/`gradient`). The palette is load-reactive: calm and cool (aqua→periwinkle→rose) when `ctx%`, 5h, and 7d are all low, warming and saturating toward red as the worst of them climbs. While working the gradient drifts left-to-right (~1 FPS, capped by the status-line repaint), and rests static otherwise. Use `segments` for a flat accent hue per segment instead |
 
 You don't have to memorize these: while idle and with nothing else to say, Bit quietly rotates a one-line hint for whichever features are still off, then goes quiet again — so they surface on their own.
 
