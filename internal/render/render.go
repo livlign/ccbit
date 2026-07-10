@@ -258,6 +258,9 @@ func offFeatureTips() []string {
 	if !rateColorOn() {
 		tips = append(tips, "set CCBIT_RATE_COLOR=1 to color rate-limit meters")
 	}
+	if ambientMode() == "" {
+		tips = append(tips, "set CCBIT_AMBIENT_COLOR=1 for a gradient ambient line")
+	}
 	return tips
 }
 
@@ -371,24 +374,151 @@ func modelSegment(model, effort string) string {
 }
 
 func line2(c Ctx) string {
+	// CCBIT_AMBIENT_COLOR turns the otherwise-grey ambient line colorful. In
+	// "gradient" mode (the default when on) the whole line is one smooth
+	// left-to-right color blend; in "segments" mode each segment gets its own flat
+	// accent hue. Either way the ctx/rate pressure warnings still punch through.
+	if c.ColorOn && ambientMode() == "gradient" {
+		return line2Gradient(c)
+	}
+	amb := c.ColorOn && ambientMode() == "segments"
 	var parts []string
 	if d := dirLabel(c.In.CurrentDir); d != "" {
-		parts = append(parts, withIcon(iconDir, d))
+		parts = append(parts, accent(withIcon(iconDir, d), ambDir, amb))
 	}
-	if g := gitSegment(c.Git, c.ColorOn); g != "" {
+	if g := gitSegment(c.Git, c.ColorOn, amb); g != "" {
 		parts = append(parts, g)
 	}
 	if seg := modelSegment(c.In.ModelName, c.In.Effort); seg != "" {
-		parts = append(parts, withIcon(iconModel, seg))
+		parts = append(parts, accent(withIcon(iconModel, seg), ambModel, amb))
 	}
 	parts = append(parts, ctxSegment(c))
-	if seg := rateSegment("5h", c.In.FiveHour, c.Now, c.ColorOn); seg != "" {
+	if seg := rateSegment("5h", c.In.FiveHour, c.Now, c.ColorOn, amb); seg != "" {
 		parts = append(parts, seg)
 	}
-	if seg := rateSegment("7d", c.In.SevenDay, c.Now, c.ColorOn); seg != "" {
+	if seg := rateSegment("7d", c.In.SevenDay, c.Now, c.ColorOn, amb); seg != "" {
 		parts = append(parts, seg)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// gspan is one piece of the gradient line: plain text that either takes the
+// gradient (fixed == "") or keeps a forced color, e.g. a pressure warning, that
+// punches through the blend (fixed is its ANSI code).
+type gspan struct{ text, fixed string }
+
+// line2Gradient builds the ambient line as plain-text spans, then washes a
+// smooth left-to-right color gradient across every glyph so the segments read as
+// one blended band instead of separate blocks. Pressure warnings on ctx/rate
+// keep their alert color and interrupt the gradient on purpose.
+func line2Gradient(c Ctx) string {
+	var spans []gspan
+	add := func(text, fixed string) {
+		if text == "" {
+			return
+		}
+		if len(spans) > 0 {
+			spans = append(spans, gspan{" · ", ""})
+		}
+		spans = append(spans, gspan{text, fixed})
+	}
+	if d := dirLabel(c.In.CurrentDir); d != "" {
+		add(withIcon(iconDir, d), "")
+	}
+	add(gitSegment(c.Git, false, false), "") // plain git text; the gradient colors it
+	if seg := modelSegment(c.In.ModelName, c.In.Effort); seg != "" {
+		add(withIcon(iconModel, seg), "")
+	}
+	add(ctxBody(c), ctxWarn(c))
+	addRate := func(label string, rl *input.RateLimit) {
+		if rl == nil || rl.UsedPercentage == nil {
+			return
+		}
+		warn := ""
+		if rateColorOn() {
+			warn = rateWarn(rl)
+		}
+		add(rateBody(label, rl, c.Now), warn)
+	}
+	addRate("5h", c.In.FiveHour)
+	addRate("7d", c.In.SevenDay)
+	return renderGradient(spans)
+}
+
+// renderGradient paints the spans: gradient glyphs get a per-position truecolor
+// escape sampled along the palette; fixed spans keep their forced color but
+// still advance the position, so a warning never shifts the blend that follows.
+func renderGradient(spans []gspan) string {
+	total := 0
+	for _, s := range spans {
+		total += len([]rune(s.text))
+	}
+	if total == 0 {
+		return ""
+	}
+	denom := total - 1
+	if denom < 1 {
+		denom = 1
+	}
+	var b strings.Builder
+	i := 0
+	for _, s := range spans {
+		if s.fixed != "" {
+			b.WriteString(s.fixed)
+			b.WriteString(s.text)
+			b.WriteString(reset)
+			i += len([]rune(s.text))
+			continue
+		}
+		for _, r := range s.text {
+			rr, gg, bb := gradientColor(float64(i) / float64(denom))
+			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm%c", rr, gg, bb, r)
+			i++
+		}
+	}
+	b.WriteString(reset)
+	return b.String()
+}
+
+// gradientStops are the color anchors of the ambient blend (sky aqua, periwinkle,
+// rose): a soft but present sweep, more saturated than a washed-out pastel yet
+// gentler than the neon-bright hues, so it reads as color without shouting.
+var gradientStops = [][3]int{
+	{0x66, 0xC8, 0xDE}, // sky aqua
+	{0x96, 0x8C, 0xEB}, // periwinkle
+	{0xE6, 0x82, 0xB4}, // rose
+}
+
+// gradientColor samples the stop palette at t in [0,1], linearly interpolating
+// between the two nearest anchors.
+func gradientColor(t float64) (int, int, int) {
+	if t <= 0 {
+		s := gradientStops[0]
+		return s[0], s[1], s[2]
+	}
+	last := len(gradientStops) - 1
+	if t >= 1 {
+		s := gradientStops[last]
+		return s[0], s[1], s[2]
+	}
+	x := t * float64(last)
+	i := int(x)
+	if i >= last {
+		i = last - 1
+	}
+	f := x - float64(i)
+	a, z := gradientStops[i], gradientStops[i+1]
+	lerp := func(p, q int) int { return int(float64(p) + (float64(q)-float64(p))*f + 0.5) }
+	return lerp(a[0], z[0]), lerp(a[1], z[1]), lerp(a[2], z[2])
+}
+
+// accent tints a whole ambient segment with its color when the ambient-color
+// feature is on, and returns it untouched otherwise.
+func accent(s, code string, on bool) string {
+	if on {
+		return colorize(s, code)
+	}
+	return s
 }
 
 // siblingClause is Bit speaking up about the other live sessions, by name. One
@@ -793,13 +923,16 @@ func lastActivity(t transcript.Turn, root, projectDir string) string {
 // when nonzero, so a clean, synced branch is just its name. When CCBIT_NERD_FONT
 // is set the change marks use Nerd Font glyphs (plus/pencil/trash); CCBIT_ICONS
 // adds a leading branch glyph; CCBIT_GIT_COLOR tints the marks green/yellow/red.
-func gitSegment(g gitx.Info, colorOn bool) string {
+func gitSegment(g gitx.Info, colorOn, ambient bool) string {
 	if g.Branch == "" {
 		return ""
 	}
 	nf := nerdFont()
 	color := colorOn && gitColorOn()
-	s := withIcon(iconBranch, g.Branch)
+	// The branch name carries the accent (magenta); the change marks keep their
+	// own green/yellow/red. Each mark is a self-closed color span, so appending
+	// them after the accented branch never bleeds or truncates.
+	s := accent(withIcon(iconBranch, g.Branch), ambBranch, ambient)
 	s += changeMark(nf, color, g.New, "+", green, "")       // nf-fa-plus
 	s += changeMark(nf, color, g.Modified, "~", yellow, "") // nf-fa-pencil
 	s += changeMark(nf, color, g.Deleted, "-", red, "")     // nf-fa-trash
@@ -836,11 +969,12 @@ func changeMark(nf, color bool, n int, ascii, colorCode, glyph string) string {
 // show as tofu without a patched font, and color/gauges are a matter of taste.
 // A quiet idle line advertises whichever are still off (see idleTip).
 const (
-	envNerdFont  = "CCBIT_NERD_FONT"  // Nerd Font glyphs for git change marks
-	envIcons     = "CCBIT_ICONS"      // a leading Nerd Font icon per ambient segment
-	envGitColor  = "CCBIT_GIT_COLOR"  // color git change marks (green/yellow/red)
-	envCtxGauge  = "CCBIT_CTX_GAUGE"  // a mini fill bar beside the ctx percentage
-	envRateColor = "CCBIT_RATE_COLOR" // escalate 5h/7d rate limits to yellow/red
+	envNerdFont     = "CCBIT_NERD_FONT"     // Nerd Font glyphs for git change marks
+	envIcons        = "CCBIT_ICONS"         // a leading Nerd Font icon per ambient segment
+	envGitColor     = "CCBIT_GIT_COLOR"     // color git change marks (green/yellow/red)
+	envCtxGauge     = "CCBIT_CTX_GAUGE"     // a mini fill bar beside the ctx percentage
+	envRateColor    = "CCBIT_RATE_COLOR"    // escalate 5h/7d rate limits to yellow/red
+	envAmbientColor = "CCBIT_AMBIENT_COLOR" // accent each ambient segment with its own color
 )
 
 // envOn reports whether an opt-in env var is set to a truthy value.
@@ -852,11 +986,26 @@ func envOn(name string) bool {
 	return false
 }
 
-func nerdFont() bool    { return envOn(envNerdFont) }
-func useIcons() bool    { return envOn(envIcons) }
+func nerdFont() bool       { return envOn(envNerdFont) }
+func useIcons() bool       { return envOn(envIcons) }
 func gitColorOn() bool  { return envOn(envGitColor) }
 func ctxGaugeOn() bool  { return envOn(envCtxGauge) }
 func rateColorOn() bool { return envOn(envRateColor) }
+
+// ambientMode reports how the ambient line should be colored: "gradient" (a
+// smooth whole-line blend, the default when the feature is on), "segments" (a
+// flat accent hue per segment), or "" (off, the plain grey line). A bare truthy
+// value means gradient.
+func ambientMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envAmbientColor))) {
+	case "1", "true", "yes", "on", "gradient":
+		return "gradient"
+	case "segment", "segments":
+		return "segments"
+	default:
+		return ""
+	}
+}
 
 // Nerd Font glyphs used as leading segment icons (nf-fa family). Each renders at
 // single width in a patched font, tofu without one — hence the CCBIT_ICONS gate.
@@ -891,7 +1040,9 @@ func dirLabel(dir string) string {
 	return filepath.Base(dir)
 }
 
-func ctxSegment(c Ctx) string {
+// ctxBody is the plain (uncolored) context segment: label, optional gauge,
+// percentage, and velocity arrow.
+func ctxBody(c Ctx) string {
 	label := "ctx"
 	if useIcons() {
 		label = iconCtx
@@ -904,20 +1055,37 @@ func ctxSegment(c Ctx) string {
 	if ctxGaugeOn() {
 		body += gaugeBar(pct) + " "
 	}
-	body += fmt.Sprintf("%d%%", pct) + trendArrow(c.Trend)
+	return body + fmt.Sprintf("%d%%", pct) + trendArrow(c.Trend)
+}
+
+// ctxWarn is the pressure color for the context segment: red past 90%, yellow
+// past 70%, empty when calm or unknown.
+func ctxWarn(c Ctx) string {
+	if c.In.CtxPct == nil {
+		return ""
+	}
+	switch pct := int(*c.In.CtxPct + 0.5); {
+	case pct >= 90:
+		return red
+	case pct >= 70:
+		return yellow
+	}
+	return ""
+}
+
+func ctxSegment(c Ctx) string {
+	body := ctxBody(c)
 	if !c.ColorOn {
 		return body
 	}
-	// Only color when it warrants attention; low usage stays grey like the rest
-	// of the ambient line (a green "all fine" badge is just noise).
-	switch {
-	case pct >= 90:
-		return colorize(body, red)
-	case pct >= 70:
-		return colorize(body, yellow)
-	default:
-		return body
+	// Pressure always escalates to yellow/red. Below the warning band the segment
+	// is calm: it takes the ambient accent in segments mode, otherwise it stays
+	// grey like the rest of the plain line (a green "all fine" badge is just
+	// noise).
+	if w := ctxWarn(c); w != "" {
+		return colorize(body, w)
 	}
+	return accent(body, ambCtx, ambientMode() == "segments")
 }
 
 // gaugeCells is the width of the ctx fill bar.
@@ -951,10 +1119,9 @@ func trendArrow(t sessions.Trend) string {
 	}
 }
 
-func rateSegment(label string, rl *input.RateLimit, now time.Time, colorOn bool) string {
-	if rl == nil || rl.UsedPercentage == nil {
-		return ""
-	}
+// rateBody is the plain (uncolored) rate meter: label, percentage, and reset
+// countdown.
+func rateBody(label string, rl *input.RateLimit, now time.Time) string {
 	pct := int(*rl.UsedPercentage + 0.5)
 	seg := fmt.Sprintf("%s %d%%", label, pct)
 	if rl.HasReset {
@@ -962,17 +1129,34 @@ func rateSegment(label string, rl *input.RateLimit, now time.Time, colorOn bool)
 			seg += fmt.Sprintf(" (%s)", fmtCountdown(d))
 		}
 	}
-	seg = withIcon(iconRate, seg)
-	// CCBIT_RATE_COLOR escalates a limit nearing its cap, mirroring ctx%.
+	return withIcon(iconRate, seg)
+}
+
+// rateWarn is the pressure color for a rate meter, mirroring ctx%: red past 90%,
+// yellow past 70%, empty when calm.
+func rateWarn(rl *input.RateLimit) string {
+	switch pct := int(*rl.UsedPercentage + 0.5); {
+	case pct >= 90:
+		return red
+	case pct >= 70:
+		return yellow
+	}
+	return ""
+}
+
+func rateSegment(label string, rl *input.RateLimit, now time.Time, colorOn, ambient bool) string {
+	if rl == nil || rl.UsedPercentage == nil {
+		return ""
+	}
+	seg := rateBody(label, rl, now)
+	// CCBIT_RATE_COLOR escalates a limit nearing its cap, mirroring ctx%. Below
+	// that band the meter takes the ambient accent when that feature is on.
 	if colorOn && rateColorOn() {
-		switch {
-		case pct >= 90:
-			seg = colorize(seg, red)
-		case pct >= 70:
-			seg = colorize(seg, yellow)
+		if w := rateWarn(rl); w != "" {
+			return colorize(seg, w)
 		}
 	}
-	return seg
+	return accent(seg, ambRate, ambient)
 }
 
 // --- duration formatting ---
@@ -1024,6 +1208,18 @@ const (
 	red       = "\x1b[31m"
 	brightRed = "\x1b[91m" // more legible than dim red on dark terminals
 	dim       = "\x1b[2m"  // faint: a stale (likely-gone) session in the roster
+)
+
+// Ambient-line accent palette (CCBIT_AMBIENT_COLOR). 256-color so the segments
+// span a real hue range and read as distinct at a glance, instead of the
+// near-identical cool blues the basic 16-color set collapses into on a dark
+// theme. Each segment owns one hue: azure, pink, green, teal, amber.
+const (
+	ambDir    = "\x1b[38;5;39m"  // folder: azure
+	ambBranch = "\x1b[38;5;213m" // git branch: pink
+	ambModel  = "\x1b[38;5;150m" // model: green
+	ambCtx    = "\x1b[38;5;80m"  // context gauge when calm: teal
+	ambRate   = "\x1b[38;5;179m" // rate meters when calm: amber
 )
 
 func colorize(s, code string) string { return code + s + reset }

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -123,7 +124,7 @@ func TestWaitingAge(t *testing.T) {
 // clearFeatureEnv turns every opt-in visual feature off for a test, so its
 // assertions don't depend on ambient CCBIT_* set in the developer's shell.
 func clearFeatureEnv(t *testing.T) {
-	for _, k := range []string{"CCBIT_NERD_FONT", "CCBIT_ICONS", "CCBIT_GIT_COLOR", "CCBIT_CTX_GAUGE", "CCBIT_RATE_COLOR"} {
+	for _, k := range []string{"CCBIT_NERD_FONT", "CCBIT_ICONS", "CCBIT_GIT_COLOR", "CCBIT_CTX_GAUGE", "CCBIT_RATE_COLOR", "CCBIT_AMBIENT_COLOR"} {
 		t.Setenv(k, "")
 	}
 }
@@ -242,6 +243,74 @@ func TestGitSegmentColor(t *testing.T) {
 	}
 }
 
+func TestAmbientGradient(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_AMBIENT_COLOR", "1") // bare truthy => gradient
+	c := ctx()
+	c.ColorOn = true
+	pct := 38.0
+	c.In.CtxPct = &pct
+	c.Git = gitx.Info{Branch: "main"}
+	l2 := Render(state.View{State: state.Idle}, c)[1]
+	// The whole line is washed with per-glyph truecolor gradient escapes, not the
+	// flat 256-color segment accents.
+	if !strings.Contains(l2, "\x1b[38;2;") {
+		t.Fatalf("gradient line2 = %q, want truecolor escapes", l2)
+	}
+	if strings.Contains(l2, ambDir) || strings.Contains(l2, ambBranch) {
+		t.Fatalf("gradient line2 = %q, should not carry flat segment accents", l2)
+	}
+	// The endpoints are the palette's first and last stops.
+	first := gradientStops[0]
+	last := gradientStops[len(gradientStops)-1]
+	if !strings.Contains(l2, fmt.Sprintf("\x1b[38;2;%d;%d;%dm", first[0], first[1], first[2])) {
+		t.Fatalf("gradient line2 = %q, want it to start at the first stop", l2)
+	}
+	if !strings.Contains(l2, fmt.Sprintf("\x1b[38;2;%d;%d;%dm", last[0], last[1], last[2])) {
+		t.Fatalf("gradient line2 = %q, want it to end at the last stop", l2)
+	}
+
+	// Off by default: the same line carries no ANSI color.
+	t.Setenv("CCBIT_AMBIENT_COLOR", "")
+	if l2 := Render(state.View{State: state.Idle}, c)[1]; strings.Contains(l2, "\x1b[") {
+		t.Fatalf("default line2 = %q, want no color", l2)
+	}
+}
+
+func TestAmbientGradientPressureWins(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_AMBIENT_COLOR", "1")
+	c := ctx()
+	c.ColorOn = true
+	hot := 95.0
+	c.In.CtxPct = &hot
+	// A ctx over the warning band punches its red through the gradient.
+	if l2 := Render(state.View{State: state.Idle}, c)[1]; !strings.Contains(l2, red) {
+		t.Fatalf("hot ctx = %q, want red punching through the gradient", l2)
+	}
+}
+
+func TestAmbientSegments(t *testing.T) {
+	clearFeatureEnv(t)
+	t.Setenv("CCBIT_AMBIENT_COLOR", "segments")
+	c := ctx()
+	c.ColorOn = true
+	pct := 38.0
+	c.In.CtxPct = &pct
+	c.Git = gitx.Info{Branch: "main"}
+	l2 := Render(state.View{State: state.Idle}, c)[1]
+	// Each identity segment takes its own flat accent hue: azure dir, pink branch.
+	if !strings.Contains(l2, colorize(withIcon(iconDir, dirLabel(c.In.CurrentDir)), ambDir)) {
+		t.Fatalf("segments line2 = %q, want azure dir", l2)
+	}
+	if !strings.Contains(l2, colorize(withIcon(iconBranch, "main"), ambBranch)) {
+		t.Fatalf("segments line2 = %q, want pink branch", l2)
+	}
+	if strings.Contains(l2, "\x1b[38;2;") {
+		t.Fatalf("segments line2 = %q, should not use the truecolor gradient", l2)
+	}
+}
+
 func TestCtxGauge(t *testing.T) {
 	clearFeatureEnv(t)
 	t.Setenv("CCBIT_CTX_GAUGE", "1")
@@ -258,17 +327,17 @@ func TestRateSegmentColor(t *testing.T) {
 	t.Setenv("CCBIT_RATE_COLOR", "1")
 	hot := 94.0
 	rl := &input.RateLimit{UsedPercentage: &hot}
-	if got := rateSegment("7d", rl, time.Time{}, true); !strings.Contains(got, red) {
+	if got := rateSegment("7d", rl, time.Time{}, true, false); !strings.Contains(got, red) {
 		t.Fatalf("hot rate segment = %q, want red", got)
 	}
 	warm := 78.0
 	rl.UsedPercentage = &warm
-	if got := rateSegment("5h", rl, time.Time{}, true); !strings.Contains(got, yellow) {
+	if got := rateSegment("5h", rl, time.Time{}, true, false); !strings.Contains(got, yellow) {
 		t.Fatalf("warm rate segment = %q, want yellow", got)
 	}
 	cool := 12.0
 	rl.UsedPercentage = &cool
-	if got := rateSegment("5h", rl, time.Time{}, true); strings.Contains(got, "\x1b[") {
+	if got := rateSegment("5h", rl, time.Time{}, true, false); strings.Contains(got, "\x1b[") {
 		t.Fatalf("healthy rate segment = %q, want no color", got)
 	}
 }
