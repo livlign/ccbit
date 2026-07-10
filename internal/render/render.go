@@ -986,8 +986,8 @@ func envOn(name string) bool {
 	return false
 }
 
-func nerdFont() bool       { return envOn(envNerdFont) }
-func useIcons() bool       { return envOn(envIcons) }
+func nerdFont() bool    { return envOn(envNerdFont) }
+func useIcons() bool    { return envOn(envIcons) }
 func gitColorOn() bool  { return envOn(envGitColor) }
 func ctxGaugeOn() bool  { return envOn(envCtxGauge) }
 func rateColorOn() bool { return envOn(envRateColor) }
