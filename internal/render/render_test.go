@@ -47,11 +47,14 @@ func TestLine1Color(t *testing.T) {
 			t.Fatalf("line1Color(%v) = %q, want %q", s, got, code)
 		}
 	}
+	// Rendered line 1 now wears the per-part vivid palette for every state (not a
+	// single whole-line signal color), so it opens with a truecolor escape and
+	// ends reset. line1Color still drives the sibling-word digest, tested above.
 	c := ctx()
 	c.ColorOn = true
 	l1 := Render(state.View{State: state.Failed, Turn: transcript.Turn{Builds: []transcript.BuildResult{{Kind: "build", IsError: true}}}}, c)[0]
-	if !strings.HasPrefix(l1, red) || !strings.HasSuffix(l1, reset) {
-		t.Fatalf("failed line1 not wrapped red: %q", l1)
+	if !strings.HasPrefix(l1, "\x1b[38;2;") || !strings.HasSuffix(l1, reset) {
+		t.Fatalf("failed line1 not per-part colored: %q", l1)
 	}
 }
 

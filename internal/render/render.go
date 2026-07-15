@@ -192,9 +192,15 @@ func Render(v state.View, c Ctx) []string {
 		frame = c.FrameFast // Working swaps every ~1s; Agents stays at ~2s
 	}
 	seed := faceSeed(c.In.SessionID, v.Turn)
-	l1 := Face(v.State, frame, c.Narrow, seed) + " " + line1(v, c)
+	face := Face(v.State, frame, c.Narrow, seed)
+	body := line1(v, c)
+	l1 := face + " " + body
 	if c.ColorOn {
-		l1 = colorize(l1, line1Color(v.State))
+		// Every state gets the multi-color treatment: the face and each
+		// " · "-separated clause takes its own hue from a per-turn palette set, soft
+		// when the session is calm and pushed bolder as context/rate usage piles up
+		// — the same load-reactive arc the ambient gradient rides.
+		l1 = colorParts(face, body, seed, ambientPressure(c))
 	}
 	// The sibling clause is appended outside the whole-line color so its own
 	// per-severity colors survive (an embedded reset would otherwise truncate
@@ -1399,3 +1405,87 @@ const (
 )
 
 func colorize(s, code string) string { return code + s + reset }
+
+// line1Palettes are several soft color-combination sets the reactive line 1
+// draws from — one per part, by position. These are the CALM appearance: muted,
+// gentle hues that sit quietly on a dark theme. The line picks one whole set per
+// turn (keyed off the turn seed, so it changes when the turn does, not on a
+// timer) and then pushes that set bolder as load climbs — see pressurize. Each
+// set spans distinct hues so adjacent parts always contrast.
+var line1Palettes = [][][3]int{
+	{ // spectrum
+		{0x8F, 0xC9, 0xC2}, {0xD6, 0x9F, 0xBB}, {0xAD, 0xC9, 0x92},
+		{0xD8, 0xC2, 0x8C}, {0xB4, 0xAD, 0xD8}, {0xD8, 0xA4, 0x92},
+	},
+	{ // ocean — cool aquas, blues, seafoam
+		{0x8F, 0xC2, 0xCE}, {0x93, 0xAC, 0xD2}, {0x9E, 0xCE, 0xBB},
+		{0xAC, 0xA5, 0xCE}, {0x8D, 0xBB, 0xB4}, {0x9E, 0xBB, 0xD2},
+	},
+	{ // sunset — warm coral, rose, gold, violet
+		{0xD8, 0xA5, 0x8F}, {0xD2, 0x96, 0xAC}, {0xD8, 0xC2, 0x96},
+		{0xC9, 0x9E, 0xC2}, {0xD8, 0xB0, 0x98}, {0xBB, 0x9E, 0xC9},
+	},
+	{ // meadow — sage greens and soft teal
+		{0x9E, 0xC2, 0x8F}, {0x8A, 0xB4, 0x92}, {0xB4, 0xC2, 0x8A},
+		{0x8F, 0xC2, 0xA5}, {0xA5, 0xB4, 0x82}, {0x96, 0xC9, 0x9E},
+	},
+	{ // berry — plums, mauve, dusty rose
+		{0xC9, 0x98, 0xB4}, {0xB4, 0x98, 0xC9}, {0xD2, 0x9E, 0xAC},
+		{0xAC, 0x9E, 0xC9}, {0xC2, 0x90, 0xBB}, {0xBB, 0xA5, 0xD2},
+	},
+	{ // dusk — muted periwinkles and lilac
+		{0xA5, 0xAC, 0xC9}, {0xC2, 0xA5, 0xC2}, {0x96, 0xB4, 0xC2},
+		{0xB4, 0xAC, 0xB4}, {0x9E, 0xA5, 0xC2}, {0xB4, 0x9E, 0xB4},
+	},
+	{ // amber — warm sand, clay, wheat
+		{0xD2, 0xB4, 0x8A}, {0xC9, 0xA5, 0x8F}, {0xD2, 0xC2, 0x96},
+		{0xBB, 0xA5, 0x8A}, {0xD2, 0xAC, 0x96}, {0xC2, 0xB4, 0x9E},
+	},
+}
+
+// pressurize takes a soft base palette and pushes it bolder as load p in [0,1]
+// climbs: each color keeps its own hue but gains saturation and a touch of depth,
+// so a calm session reads soft and muted while a loaded one glows vivid — the
+// same calm→intense arc the ambient gradient rides. At p<=0 the base is returned
+// unchanged.
+func pressurize(base [][3]int, p float64) [][3]int {
+	if p <= 0 {
+		return base
+	}
+	if p > 1 {
+		p = 1
+	}
+	// Ease-in (quadratic): stay soft through low/mid load, bolden only late, so
+	// the line goes vivid only when the session is genuinely piling up.
+	p = p * p
+	out := make([][3]int, len(base))
+	for i, c := range base {
+		h, s, l := rgbToHSL(c[0], c[1], c[2])
+		s += (0.95 - s) * p // toward vivid
+		l += (0.58 - l) * p // deepen a touch (the soft bases sit lighter)
+		r, g, b := hslToRGB(h, s, l)
+		out[i] = [3]int{r, g, b}
+	}
+	return out
+}
+
+// colorParts colors the face and each " · "-separated clause with its own hue
+// from the per-turn palette set, pushed bolder by pressure (soft when calm, vivid
+// under load). Colors are assigned by position so each part contrasts with its
+// neighbors; separators stay dim so the parts read as distinct blocks.
+func colorParts(face, body string, seed uint64, pressure float64) string {
+	base := line1Palettes[int(seed%uint64(len(line1Palettes)))]
+	set := pressurize(base, pressure)
+	parts := append([]string{face}, strings.Split(body, " · ")...)
+	var b strings.Builder
+	for i, p := range parts {
+		if i == 1 {
+			b.WriteString(" ") // face is space-joined to the body, not " · "-joined
+		} else if i > 1 {
+			b.WriteString(dim + " · " + reset)
+		}
+		c := set[i%len(set)]
+		fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm%s%s", c[0], c[1], c[2], p, reset)
+	}
+	return b.String()
+}
