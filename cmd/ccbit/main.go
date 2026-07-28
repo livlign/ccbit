@@ -26,6 +26,7 @@ import (
 	"github.com/livlign/ccbit/internal/sessions"
 	"github.com/livlign/ccbit/internal/state"
 	"github.com/livlign/ccbit/internal/transcript"
+	"github.com/livlign/ccbit/internal/webapp"
 )
 
 // version is stamped by the release pipeline (goreleaser ldflags); "dev" for
@@ -183,6 +184,12 @@ func statusLine() {
 			tasks = transcript.Tasks(entries)
 		}
 	}
+	// Dev servers are tracked off the raw transcript (incrementally, whole file)
+	// rather than the parsed tail: a server started an hour ago has long scrolled
+	// out of the tail window but is still the thing you want to know about. The
+	// project root scopes it: a port is only this session's business if the
+	// process listening on it is working inside this project.
+	web := webapp.Detect(in.SessionID, in.TranscriptPath, webapp.ProjectRoot(root, in.CurrentDir), now)
 	turnStart, hasStart := currentTurnStart(turns)
 	if in.TranscriptPath != "" {
 		agents = transcript.ScanSubagents(in.TranscriptPath, now, stall, turnStart, hasStart)
@@ -260,6 +267,7 @@ func statusLine() {
 		SelfTitle:        title,
 		LastPromptAt:     turnStart, // zero when no turn seen: show all sibling news
 		Git:              gitInfo(root, now),
+		Web:              web,
 	}
 
 	for _, line := range render.Render(v, ctx) {

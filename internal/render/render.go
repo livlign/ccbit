@@ -18,6 +18,7 @@ import (
 	"github.com/livlign/ccbit/internal/sessions"
 	"github.com/livlign/ccbit/internal/state"
 	"github.com/livlign/ccbit/internal/transcript"
+	"github.com/livlign/ccbit/internal/webapp"
 )
 
 // NarrowCols is the COLUMNS threshold below which risky wide glyphs fall back to
@@ -67,6 +68,11 @@ type Ctx struct {
 
 	// Git is the repo's branch/dirty/ahead/behind snapshot for the ambient line.
 	Git gitx.Info
+
+	// Web is the local dev-server status: which localhost ports this session
+	// started (or talked to) and whether they are listening right now. A
+	// backgrounded `npm run dev` otherwise gives no sign of life.
+	Web webapp.Info
 }
 
 // The Working and Idle faces are assembled per turn from shared parts: a pool
@@ -398,6 +404,9 @@ func line2(c Ctx, working bool) string {
 	if g := gitSegment(c.Git, c.ColorOn, amb); g != "" {
 		parts = append(parts, g)
 	}
+	if seg := webSegment(c, amb); seg != "" {
+		parts = append(parts, seg)
+	}
 	if seg := modelSegment(c.In.ModelName, c.In.Effort); seg != "" {
 		parts = append(parts, accent(withIcon(iconModel, seg), ambModel, amb))
 	}
@@ -435,6 +444,18 @@ func line2Gradient(c Ctx, working bool) string {
 		add(withIcon(iconDir, d))
 	}
 	add(gitSegment(c.Git, false, false)) // plain git text; the gradient colors it
+	if body := webBody(c); body != "" {
+		// A dead server is the one ambient fact worth interrupting the blend for:
+		// the whole point of the segment is noticing the moment it stops answering.
+		if fixed := webWarn(c); fixed != "" {
+			if len(spans) > 0 {
+				spans = append(spans, gspan{" · ", ""})
+			}
+			spans = append(spans, gspan{body, fixed})
+		} else {
+			add(body)
+		}
+	}
 	if seg := modelSegment(c.In.ModelName, c.In.Effort); seg != "" {
 		add(withIcon(iconModel, seg))
 	}
@@ -1197,6 +1218,7 @@ const (
 	iconModel  = "" // nf-fa-microchip
 	iconCtx    = "" // nf-fa-tachometer
 	iconRate   = "" // nf-fa-clock_o
+	iconWeb    = "" // nf-fa-globe
 )
 
 // withIcon prefixes a segment with a Nerd Font icon when CCBIT_ICONS is on.
@@ -1220,6 +1242,39 @@ func dirLabel(dir string) string {
 		}
 	}
 	return filepath.Base(dir)
+}
+
+// webBody is the plain (uncolored) dev-server segment, empty when this session
+// has no local server to speak of.
+func webBody(c Ctx) string {
+	body := webapp.Format(c.Web, c.Narrow)
+	if body == "" {
+		return ""
+	}
+	return withIcon(iconWeb, body)
+}
+
+// webWarn is the alert color for the dev-server segment: yellow once anything
+// the session started has stopped answering. A server that is simply up stays
+// calm, like every other healthy ambient fact.
+func webWarn(c Ctx) string {
+	for _, s := range c.Web.Servers {
+		if !s.Running {
+			return yellow
+		}
+	}
+	return ""
+}
+
+func webSegment(c Ctx, amb bool) string {
+	body := webBody(c)
+	if body == "" || !c.ColorOn {
+		return body
+	}
+	if w := webWarn(c); w != "" {
+		return colorize(body, w)
+	}
+	return accent(body, ambWeb, amb)
 }
 
 // ctxBody is the plain (uncolored) context segment: label, optional gauge,
@@ -1402,6 +1457,7 @@ const (
 	ambModel  = "\x1b[38;5;150m" // model: green
 	ambCtx    = "\x1b[38;5;80m"  // context gauge when calm: teal
 	ambRate   = "\x1b[38;5;179m" // rate meters when calm: amber
+	ambWeb    = "\x1b[38;5;141m" // dev server when up: violet
 )
 
 func colorize(s, code string) string { return code + s + reset }

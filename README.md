@@ -13,7 +13,7 @@ ccbit answers, at a glance: *is anything working, done, waiting, broken, or stop
 ~/ccbit · main +1 ~2 -1 ↑1 · Opus 4.8 (high) · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
 ```
 
-It is a single Go binary. **No hooks, no daemons.** The transcript is the source of truth; Claude Code already writes it and owns its lifecycle. ccbit only reads it (plus two small, disposable state dirs of its own — see [How it works](#how-it-works)).
+It is a single Go binary. **No hooks, no daemons.** The transcript is the source of truth; Claude Code already writes it and owns its lifecycle. ccbit only reads it (plus three small, disposable state dirs of its own — see [How it works](#how-it-works)).
 
 ## Install
 
@@ -113,10 +113,30 @@ To see every face before a real session happens to hit each state, run `ccbit de
 ### Line 2 — the ambient line
 
 ```
-~/ccbit · main +1 ~2 -1 ↑1 · Opus 4.8 (high) · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
+~/ccbit · main +1 ~2 -1 ↑1 · localhost:5500 (running) · Opus 4.8 (high) · ctx 38% ↑ · 5h 3% (4h37m) · 7d 0% (6d20h)
 ```
 
-Current directory, git branch, model (with its reasoning effort), context-window usage, and rate-limit windows with their reset countdowns. The git segment breaks the worktree down as `+new ~modified -deleted` (each shown only when nonzero), followed by `↑ahead ↓behind`. `ctx%` colors only when it warrants attention (≥70 yellow, ≥90 red) and carries a velocity arrow — `↑` while context is climbing, `↓` after a `/compact`. Several segments have optional color/icon upgrades — see [Configuration](#configuration).
+Current directory, git branch, local dev servers, model (with its reasoning effort), context-window usage, and rate-limit windows with their reset countdowns. The git segment breaks the worktree down as `+new ~modified -deleted` (each shown only when nonzero), followed by `↑ahead ↓behind`. `ctx%` colors only when it warrants attention (≥70 yellow, ≥90 red) and carries a velocity arrow — `↑` while context is climbing, `↓` after a `/compact`. Several segments have optional color/icon upgrades — see [Configuration](#configuration).
+
+**Dev servers.** An `npm run dev` sent to the background gives no sign of life once it scrolls away. ccbit reads the session transcript for localhost ports (incrementally, the whole file, so a server started an hour ago is not forgotten when its startup banner scrolls out of the parse window), dials each one on loopback, and asks the OS who is listening:
+
+```
+ccbit · main · localhost:3001,5501 (running) · Opus 4.8 (high) · ctx 38%
+```
+
+Two checks have to pass before a port reaches the line, because the transcript alone is worthless here. A port number in a chat is not a server: it may be a URL you pasted, a value in a config, a port from a test that never came up, or a neighbouring project's app. Conversely the transcript is often silent about the server that *is* running.
+
+1. **Is it up?** ccbit dials it. A port it has never personally found answering is never shown.
+2. **Is it yours?** ccbit asks the OS which process holds the socket and checks whether that process is working inside this project (its command line or working directory). A server belonging to another repo is another line's business, however often this session names it.
+
+The ownership check is a direct socket-table lookup, not a shell-out: `iphlpapi` plus a PEB read on Windows (~0.1ms; the obvious `Get-NetTCPConnection | Get-CimInstance` route measures 1.5s and is far too slow for a line that repaints every second), `/proc` on Linux, `lsof` on macOS. It matches on the process, not its parentage, because dev servers are usually orphans by the time you ask: the shell that launched them has exited, while `node .../<project>/node_modules/vite/bin/vite.js` still names its project. When the OS cannot answer (an unsupported platform, a process owned by another user), the port keeps its place: a failed lookup is not evidence against a server.
+
+- **`(down)` means it died.** A port drops to `(down)` only after ccbit saw it up and then stop answering, and it stays for 5 minutes before fading. Scoped the same way, so a neighbouring project's crash stays off your line.
+- **IPv4 and IPv6.** A dev server told to bind `localhost` frequently lands on `[::1]` alone (Node does this on Windows). Both loopbacks are tried, so such a server reads as running instead of dead.
+- **Cheap.** Ports are dialed at most every 5 seconds and attributed at most once a minute, not on every ~1s repaint, so a healthy server does not accumulate hundreds of `TIME_WAIT` sockets.
+- **Per session.** What ccbit knows lives in `~/.claude/ccbit/ports/<session>.json` (disposable, like every other bit of ccbit state) and is forgotten after 12 hours of neither being mentioned nor being up.
+
+One port reads as a sentence; several collapse behind a shared host, and a narrow terminal falls back to a count (`localhost 2/3 running`). Nothing is ever started or stopped on your behalf: ccbit opens a TCP connection and immediately closes it.
 
 ## Bit gets smarter over time
 
@@ -142,7 +162,7 @@ Off by default and set independently — none can be safely auto-detected (Nerd 
 | Var | Effect |
 |---|---|
 | `CCBIT_NERD_FONT` | Nerd Font glyphs for git change marks — plus / pencil / trash instead of `+ ~ -` (requires a patched Nerd Font) |
-| `CCBIT_ICONS` | a leading Nerd Font icon on each ambient segment — folder, branch, chip, gauge, clock (requires a patched Nerd Font) |
+| `CCBIT_ICONS` | a leading Nerd Font icon on each ambient segment — folder, branch, globe, chip, gauge, clock (requires a patched Nerd Font) |
 | `CCBIT_GIT_COLOR` | color the git change marks: green new, yellow modified, red deleted |
 | `CCBIT_CTX_GAUGE` | a small fill bar beside the context percentage (`ctx ▆▆▁▁▁ 38%`) |
 | `CCBIT_RATE_COLOR` | escalate the 5h / 7d rate-limit meters to yellow (≥70%) then red (≥90%), like `ctx%` |
@@ -169,17 +189,21 @@ no space left on device	disk full — clear build cache
 ```
 Claude Code ──(stdin JSON: transcript_path, model, context, rate_limits, cost)──► ccbit (Go binary)
                                                                                        │
-                                          reads ──► session transcript (.jsonl, last 2 MiB)
+                                          reads ──► session transcript (.jsonl, last 2 MiB; ports scanned incrementally)
                                           r/w   ──► ~/.claude/ccbit/sessions/  (heartbeats: cross-session awareness)
                                           r/w   ──► ~/.claude/ccbit/memory/    (per-project learned aggregates)
+                                          r/w   ──► ~/.claude/ccbit/ports/     (per-session dev-server liveness)
+                                          dials ──► 127.0.0.1 / [::1] (is the dev server up?)
+                                          asks  ──► OS socket table (whose process is it?)
                                                                                        ▼
                                                                        derive state ──► print 2 lines ──► exit
 ```
 
-Each invocation reads stdin, tail-reads the transcript (bounded at 2 MiB so cost stays flat on long sessions), derives the state, and prints. Two small on-disk stores let it do what a single transcript can't:
+Each invocation reads stdin, tail-reads the transcript (bounded at 2 MiB so cost stays flat on long sessions), derives the state, and prints. Three small on-disk stores let it do what a single transcript can't:
 
 - **Heartbeats** are ephemeral per-session files. Each session writes its own state every render and reads its siblings' — that's how Bit knows another window crashed or finished. They carry the session's title and a rolling window of `ctx%` samples (for the velocity arrow), and self-expire when a session goes quiet.
 - **Memory** is durable per-project aggregates (typical turn duration and in-turn gaps), updated once per completed turn via a per-session high-water mark so the per-second renders never double-count.
+- **Ports** is what each session knows about its local dev servers: which localhost ports it has seen named, when each was last dialed, and when a dial last succeeded. It also holds each port's ownership verdict and the byte offset the port scanner has read to, so each render only scans the transcript bytes appended since the last one, which is how a server stays visible long after its startup banner leaves the 2 MiB tail.
 
 Both are disposable optimizations, never authoritative: delete either dir and ccbit keeps working on fixed defaults.
 
