@@ -121,11 +121,11 @@ func TestWaitingAge(t *testing.T) {
 	}
 }
 
-// clearFeatureEnv turns every opt-in visual feature off for a test, so its
-// assertions don't depend on ambient CCBIT_* set in the developer's shell.
+// clearFeatureEnv turns every visual feature off for a test, so its assertions
+// don't depend on defaults or on ambient CCBIT_* set in the developer's shell.
 func clearFeatureEnv(t *testing.T) {
 	for _, k := range []string{"CCBIT_NERD_FONT", "CCBIT_ICONS", "CCBIT_GIT_COLOR", "CCBIT_CTX_GAUGE", "CCBIT_RATE_COLOR", "CCBIT_AMBIENT_COLOR"} {
-		t.Setenv(k, "")
+		t.Setenv(k, "0")
 	}
 }
 
@@ -268,8 +268,8 @@ func TestAmbientGradient(t *testing.T) {
 		t.Fatalf("gradient line2 = %q, want it to end at the last stop", l2)
 	}
 
-	// Off by default: the same line carries no ANSI color.
-	t.Setenv("CCBIT_AMBIENT_COLOR", "")
+	// Turned off: the same line carries no ANSI color.
+	t.Setenv("CCBIT_AMBIENT_COLOR", "0")
 	if l2 := Render(state.View{State: state.Idle}, c)[1]; strings.Contains(l2, "\x1b[") {
 		t.Fatalf("default line2 = %q, want no color", l2)
 	}
@@ -388,10 +388,10 @@ func TestRateSegmentColor(t *testing.T) {
 func TestIdleTipRotates(t *testing.T) {
 	clearFeatureEnv(t) // all features off → all tips eligible
 	c := ctx()
-	// A showing slot (slot%tipShowEvery==0): first tip is the Nerd Font hint.
+	// A showing slot (slot%tipShowEvery==0): first tip is the git color hint.
 	c.Now = time.Unix(0, 0)
-	if l1 := Render(state.View{State: state.Idle}, c)[0]; !strings.Contains(l1, "tip: set CCBIT_NERD_FONT=1") {
-		t.Fatalf("idle line = %q, want Nerd Font tip", l1)
+	if l1 := Render(state.View{State: state.Idle}, c)[0]; !strings.Contains(l1, "tip: set CCBIT_GIT_COLOR=1") {
+		t.Fatalf("idle line = %q, want git color tip", l1)
 	}
 	// A resting slot shows no tip.
 	c.Now = time.Unix(tipPeriodSecs, 0) // slot 1, 1%3 != 0

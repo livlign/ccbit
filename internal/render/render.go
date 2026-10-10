@@ -254,25 +254,16 @@ func idleTip(c Ctx) string {
 // offFeatureTips lists a one-line enable hint for each visual feature that is
 // currently off, in a stable order. Polished, imperative, and self-describing:
 // the env var name is the action.
+//
+// Only opt-in features are advertised: a default-on feature that is off was
+// turned off deliberately, so suggesting it back would just nag.
 func offFeatureTips() []string {
 	var tips []string
-	if !nerdFont() {
-		tips = append(tips, "set CCBIT_NERD_FONT=1 for Nerd Font icons")
-	}
 	if !gitColorOn() {
 		tips = append(tips, "set CCBIT_GIT_COLOR=1 to color git changes")
 	}
-	if !useIcons() {
-		tips = append(tips, "set CCBIT_ICONS=1 for per-segment icons")
-	}
-	if !ctxGaugeOn() {
-		tips = append(tips, "set CCBIT_CTX_GAUGE=1 for a context gauge")
-	}
 	if !rateColorOn() {
 		tips = append(tips, "set CCBIT_RATE_COLOR=1 to color rate-limit meters")
-	}
-	if ambientMode() == "" {
-		tips = append(tips, "set CCBIT_AMBIENT_COLOR=1 for a gradient ambient line")
 	}
 	return tips
 }
@@ -1167,10 +1158,11 @@ func changeMark(nf, color bool, n int, ascii, colorCode, glyph string) string {
 	return mark
 }
 
-// Optional visual features, each opt-in via its own env var (default off). They
-// stay off by default because none can be safely auto-detected: Nerd Font glyphs
-// show as tofu without a patched font, and color/gauges are a matter of taste.
-// A quiet idle line advertises whichever are still off (see idleTip).
+// Optional visual features, each toggled by its own env var. Nerd Font glyphs,
+// icons, the ctx gauge, and the ambient gradient are on by default (set the var
+// to 0 to turn one off — e.g. CCBIT_NERD_FONT=0 without a patched font, where
+// the glyphs show as tofu). Git and rate-limit coloring stay opt-in; a quiet
+// idle line advertises whichever of those are still off (see idleTip).
 const (
 	envNerdFont     = "CCBIT_NERD_FONT"     // Nerd Font glyphs for git change marks
 	envIcons        = "CCBIT_ICONS"         // a leading Nerd Font icon per ambient segment
@@ -1180,33 +1172,35 @@ const (
 	envAmbientColor = "CCBIT_AMBIENT_COLOR" // accent each ambient segment with its own color
 )
 
-// envOn reports whether an opt-in env var is set to a truthy value.
-func envOn(name string) bool {
+// envFlag reports a feature env var as a bool: truthy values turn it on, falsy
+// ones off, and anything else (including unset or empty) yields def.
+func envFlag(name string, def bool) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "1", "true", "yes", "on":
 		return true
+	case "0", "false", "no", "off":
+		return false
 	}
-	return false
+	return def
 }
 
-func nerdFont() bool    { return envOn(envNerdFont) }
-func useIcons() bool    { return envOn(envIcons) }
-func gitColorOn() bool  { return envOn(envGitColor) }
-func ctxGaugeOn() bool  { return envOn(envCtxGauge) }
-func rateColorOn() bool { return envOn(envRateColor) }
+func nerdFont() bool    { return envFlag(envNerdFont, true) }
+func useIcons() bool    { return envFlag(envIcons, true) }
+func gitColorOn() bool  { return envFlag(envGitColor, false) }
+func ctxGaugeOn() bool  { return envFlag(envCtxGauge, true) }
+func rateColorOn() bool { return envFlag(envRateColor, false) }
 
 // ambientMode reports how the ambient line should be colored: "gradient" (a
-// smooth whole-line blend, the default when the feature is on), "segments" (a
-// flat accent hue per segment), or "" (off, the plain grey line). A bare truthy
-// value means gradient.
+// smooth whole-line blend, the default), "segments" (a flat accent hue per
+// segment), or "" (off, the plain grey line, via a falsy value).
 func ambientMode() string {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(envAmbientColor))) {
-	case "1", "true", "yes", "on", "gradient":
-		return "gradient"
+	case "0", "false", "no", "off":
+		return ""
 	case "segment", "segments":
 		return "segments"
 	default:
-		return ""
+		return "gradient"
 	}
 }
 
